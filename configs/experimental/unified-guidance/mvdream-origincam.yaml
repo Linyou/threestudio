@@ -1,6 +1,6 @@
 name: mvdream-origincam
 tag: "${rmspace:${system.prompt_processor.prompt},_}"
-exp_root_dir: "outputs"
+exp_root_dir: /mnt/pfs/users/liuyingtian/3dstudio/exps
 seed: 0
 
 

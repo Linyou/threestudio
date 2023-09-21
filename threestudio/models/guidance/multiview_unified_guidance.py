@@ -313,7 +313,7 @@ class MultiViewUnifiedGuidance(BaseModule):
                 torch.cat([latents_multiview_noisy] * 2, dim=0),
                 torch.cat([t] * 2, dim=0),
                 encoder_hidden_states=text_embeddings,
-                camera_matrixs=camera_matrixs,
+                camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
             ).sample
             # noise_pred = self.forward_unet(
             #     self.pipe.unet,

@@ -1,6 +1,6 @@
-name: mvdream
+me: mvdream
 tag: "${rmspace:${system.prompt_processor.prompt},_}"
-exp_root_dir: "outputs/mvdream_1"
+exp_root_dir: "outputs/mvdream_2"
 seed: 0
 
 
@@ -32,36 +32,29 @@ system_type: mvdream-system
 system:
   geometry_type: "implicit-volume"
   geometry:
-    radius: 0.5
+    radius: 2.
     normal_type: analytic
-
-    density_bias: "blob_magic3d"
-    density_activation: softplus
-    density_blob_scale: 10.
-    density_blob_std: 0.5
-
     pos_encoding_config:
       otype: HashGrid
       n_levels: 16
       n_features_per_level: 2
       log2_hashmap_size: 19
       base_resolution: 16
-      per_level_scale: 1.447269237440378 # max resolution 4096
+      per_level_scale: 1.4472692374403782 # max resolution 4096
+    density_bias: "blob_magic3d"
+    density_activation: softplus
+    density_blob_scale: 10.
+    density_blob_std: 0.5
+    isosurface_resolution: 128
+    isosurface_threshold: auto
+    isosurface_coarse_to_fine: true
 
-  material_type: "no-material"
+  material_type: "diffuse-with-point-light-material"
   material:
-    n_output_dims: 3
-    color_activation: sigmoid
-  # material_type: "diffuse-with-point-light-material"
-  # material:
-  #   ambient_only_steps: 2001
-  #   albedo_activation: sigmoid
+    ambient_only_steps: 2001
+    soft_shading: true
 
   background_type: "neural-environment-map-background"
-  background:
-    color_activation: sigmoid
-    random_aug: false
-    random_aug_prob: 0.5
 
   renderer_type: "nerf-volume-renderer"
   renderer:
@@ -70,7 +63,7 @@ system:
 
   prompt_processor_type: "stable-diffusion-prompt-processor"
   prompt_processor:
-    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1/snapshots/5cae40e6a2745ae2b01ad92ae5043f95f23644d6/
+    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b
     prompt: ???
 
     prompt_front: ${system.prompt_processor.prompt}
@@ -83,8 +76,8 @@ system:
   guidance_type: multiview-unified-guidance
   guidance:
     guidance_type: sds
-    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1/snapshots/5cae40e6a2745ae2b01ad92ae5043f95f23644d6/
-    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion-sd21-prob0.5-human
+    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b
+    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion20M
     guidance_scale: 100.0
     weighting_strategy: dreamfusion
     min_step_percent: [0, 0.98, 0.02, 8000]

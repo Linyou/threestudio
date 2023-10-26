@@ -70,7 +70,7 @@ system:
 
   prompt_processor_type: "stable-diffusion-prompt-processor"
   prompt_processor:
-    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1/snapshots/5cae40e6a2745ae2b01ad92ae5043f95f23644d6/
+    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b
     prompt: ???
 
     prompt_front: ${system.prompt_processor.prompt}
@@ -83,8 +83,8 @@ system:
   guidance_type: multiview-unified-guidance
   guidance:
     guidance_type: sds
-    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1/snapshots/5cae40e6a2745ae2b01ad92ae5043f95f23644d6/
-    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion-sd21-prob0.5-human
+    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b
+    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion20M
     guidance_scale: 100.0
     weighting_strategy: dreamfusion
     min_step_percent: [0, 0.98, 0.02, 8000]

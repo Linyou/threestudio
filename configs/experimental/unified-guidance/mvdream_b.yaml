@@ -1,8 +1,7 @@
 name: mvdream
 tag: "${rmspace:${system.prompt_processor.prompt},_}"
-exp_root_dir: "outputs/mvdream_1"
+exp_root_dir: "outputs/mvdream_b_ablation"
 seed: 0
-
 
 data_type: "random-camera-uniform-view-datamodule"
 data:
@@ -32,8 +31,8 @@ system_type: mvdream-system
 system:
   geometry_type: "implicit-volume"
   geometry:
-    radius: 0.5
-    normal_type: analytic
+    radius: 1.0
+    normal_type: "analytic"
 
     density_bias: "blob_magic3d"
     density_activation: softplus
@@ -48,20 +47,20 @@ system:
       base_resolution: 16
       per_level_scale: 1.447269237440378 # max resolution 4096
 
-  material_type: "no-material"
+  material_type: "diffuse-with-point-light-material"
   material:
-    n_output_dims: 3
-    color_activation: sigmoid
-  # material_type: "diffuse-with-point-light-material"
-  # material:
-  #   ambient_only_steps: 2001
-  #   albedo_activation: sigmoid
+    ambient_only_steps: 5000
+    textureless_prob: 0.5
+    ambient_light_color: [1.0, 1.0, 1.0]
+    diffuse_light_color: [0.0, 0.0, 0.0]
+    soft_shading: true
+    albedo_activation: sigmoid
 
   background_type: "neural-environment-map-background"
   background:
     color_activation: sigmoid
-    random_aug: false
-    random_aug_prob: 0.5
+    random_aug: true
+    share_aug_bg: true
 
   renderer_type: "nerf-volume-renderer"
   renderer:
@@ -70,9 +69,9 @@ system:
 
   prompt_processor_type: "stable-diffusion-prompt-processor"
   prompt_processor:
-    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1/snapshots/5cae40e6a2745ae2b01ad92ae5043f95f23644d6/
+    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b
     prompt: ???
-
+    negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
     prompt_front: ${system.prompt_processor.prompt}
     prompt_side: ${system.prompt_processor.prompt}
     prompt_back: ${system.prompt_processor.prompt}
@@ -83,9 +82,9 @@ system:
   guidance_type: multiview-unified-guidance
   guidance:
     guidance_type: sds
-    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1/snapshots/5cae40e6a2745ae2b01ad92ae5043f95f23644d6/
-    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion-sd21-prob0.5-human
-    guidance_scale: 100.0
+    pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b
+    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion20M
+    guidance_scale: 50.0
     weighting_strategy: dreamfusion
     min_step_percent: [0, 0.98, 0.02, 8000]
     max_step_percent: [0, 0.98, 0.5, 8000]
@@ -98,20 +97,28 @@ system:
     wandb:
       enable: false
       project: "threestudio"
-      name: None
 
   loss:
     lambda_sd: 1.
-    # lambda_orient: [0, 10., 1000., 5000]
-    lambda_orient: 0.
-    lambda_sparsity: 1.
+    lambda_orient: [0, 10., 1000., 5000]
+    lambda_sparsity: 0.
     lambda_opaque: 0.
+    lambda_z_variance: 0.
+
   optimizer:
     name: AdamW
-    lr: 0.01
     args:
       betas: [0.9, 0.99]
       eps: 1.e-15
+    params:
+      geometry.encoding:
+        lr: 0.01
+      geometry.density_network:
+        lr: 0.001
+      geometry.feature_network:
+        lr: 0.001
+      background:
+        lr: 0.001
 
 trainer:
   max_steps: 10000

@@ -1,6 +1,6 @@
 name: mvdream
 tag: "${rmspace:${system.prompt_processor.prompt},_}"
-exp_root_dir: "outputs/mvdream_1"
+exp_root_dir: "outputs/mvdream_b"
 seed: 0
 
 
@@ -84,7 +84,7 @@ system:
   guidance:
     guidance_type: sds
     pretrained_model_name_or_path: /mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1/snapshots/5cae40e6a2745ae2b01ad92ae5043f95f23644d6/
-    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion-sd21-prob0.5-human
+    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/lvis-4w-laion/
     guidance_scale: 100.0
     weighting_strategy: dreamfusion
     min_step_percent: [0, 0.98, 0.02, 8000]

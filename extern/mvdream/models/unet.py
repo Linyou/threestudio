@@ -107,15 +107,21 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
             self.class_embedding = None
 
         # camera metrix
-        def init_linear(l, stddev):
-            nn.init.normal_(l.weight, std=stddev)
-            if l.bias is not None:
-                nn.init.constant_(l.bias, 0.0)
+        # def init_linear(l, stddev):
+        #     nn.init.normal_(l.weight, std=stddev)
+        #     if l.bias is not None:
+        #         nn.init.constant_(l.bias, 0.0)
 
-        self.camera_embedding_1 = nn.Linear(camera_input_dim, camera_hidden_dim)
-        self.camera_embedding_2 = nn.Linear(camera_hidden_dim, camera_output_dim)
-        init_linear(self.camera_embedding_1, 0.25)
-        init_linear(self.camera_embedding_2, 0.25)
+        # self.camera_embedding_1 = nn.Linear(camera_input_dim, camera_hidden_dim)
+        # self.camera_embedding_2 = nn.Linear(camera_hidden_dim, camera_output_dim)
+        # init_linear(self.camera_embedding_1, 0.25)
+        # init_linear(self.camera_embedding_2, 0.25)
+
+        self.camera_embedding = nn.Sequential(
+            nn.Linear(camera_input_dim, time_embed_dim),
+            nn.SiLU(),
+            nn.Linear(time_embed_dim, time_embed_dim),
+        )
 
         self.down_blocks = nn.ModuleList([])
         self.mid_block = None
@@ -380,8 +386,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
 
         if camera_matrixs is not None:
             # came emb
-            cam_emb = self.camera_embedding_1(camera_matrixs)
-            cam_emb = self.camera_embedding_2(cam_emb)
+            cam_emb = self.camera_embedding(camera_matrixs)
+            # cam_emb = self.camera_embedding_2(cam_emb)
             emb = emb.repeat(1, cam_emb.shape[1], 1)  # torch.Size([32, 4, 1280])
             emb = emb + cam_emb
 

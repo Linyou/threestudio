@@ -12,5 +12,7 @@ from . import (
     textmesh,
     zero123,
     zero123_simple,
-    mvdream,
+    mvdream_vast,
+    unidream,
+    mvdream
 )

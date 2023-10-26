@@ -230,6 +230,8 @@ class BaseLift3DSystem(BaseSystem):
 
         guidance_type: str = ""
         guidance: dict = field(default_factory=dict)
+        guidance_normal: dict = field(default_factory=dict)
+        
 
         prompt_processor_type: str = ""
         prompt_processor: dict = field(default_factory=dict)

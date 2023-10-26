@@ -8,4 +8,5 @@ from . import (
     zero123_guidance,
     zero123_unified_guidance,
     multiview_unified_guidance,
+    multiview_diffusion_guidance
 )

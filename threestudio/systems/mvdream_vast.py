@@ -1,61 +1,49 @@
-import os
 from dataclasses import dataclass, field
 
 import torch
 
 import threestudio
 from threestudio.systems.base import BaseLift3DSystem
-from threestudio.utils.misc import cleanup, get_device
 from threestudio.utils.ops import binary_cross_entropy, dot
 from threestudio.utils.typing import *
 
 
-@threestudio.register("mvdream-system")
-class MVDreamSystem(BaseLift3DSystem):
+@threestudio.register("mvdream-system-vast")
+class MVDream(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
-        visualize_samples: bool = False
+        pass
 
     cfg: Config
 
-    def configure(self) -> None:
-        # set up geometry, material, background, renderer
+    def configure(self):
+        # create geometry, material, background, renderer
         super().configure()
-        self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
-        self.guidance.requires_grad_(False)
         self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
             self.cfg.prompt_processor
         )
-        self.prompt_utils = self.prompt_processor()
-
-    def on_load_checkpoint(self, checkpoint):
-        for k in list(checkpoint['state_dict'].keys()):
-            if k.startswith("guidance."):
-                return
-        guidance_state_dict = {"guidance."+k : v for (k,v) in self.guidance.state_dict().items()}
-        checkpoint['state_dict'] = {**checkpoint['state_dict'], **guidance_state_dict}
-        return 
-
-    def on_save_checkpoint(self, checkpoint):
-        for k in list(checkpoint['state_dict'].keys()):
-            if k.startswith("guidance."):
-                checkpoint['state_dict'].pop(k)
-        return 
+        self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
-        return self.renderer(**batch)
+        render_out = self.renderer(**batch)
+        return {
+            **render_out,
+        }
 
+    def on_fit_start(self) -> None:
+        super().on_fit_start()
+       
     def training_step(self, batch, batch_idx):
         out = self(batch)
-
+        prompt_utils = self.prompt_processor()
         guidance_out = self.guidance(
-            out["comp_rgb"], self.prompt_utils, **batch
+            out["comp_rgb"], prompt_utils, **batch, rgb_as_latents=False
         )
 
         loss = 0.0
 
         for name, value in guidance_out.items():
-            self.log(f"train/{name}", value)
+            # self.log(f"train/{name}", value)
             if name.startswith("loss_"):
                 loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
 

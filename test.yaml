@@ -1,0 +1,50 @@
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: mvdream-lyg-b-a-12
+spec:
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        spec:
+          imagePullSecrets:
+            - name: vast-secret
+          containers:
+          - image: ccr-23gxup9u-vpc.cnc.bj.baidubce.com/model/ts3d:v_magic123_2_mv
+            name: pytorch
+            securityContext:
+              capabilities:
+                add: ["IPC_LOCK"]
+            resources:
+              limits:
+                baidu.com/a800_80g_cgpu: "1"
+              requests:
+                baidu.com/a800_80g_cgpu: "1"
+            command:
+              - "/bin/sh"
+              - "-c"
+              - "sleep inf"
+              #- "cd /mnt/pfs/users/liyangguang/vastcode/tune-a-video && export OMP_NUM_THREADS=1 && accelerate launch train_mvimage.py --config=configs/multiview-image.yaml "
+            env:
+              - name: NCCL_DEBUG
+                value: INFO
+              - name: NCCL_IB_DISABLE
+                value: "0"
+              - name: LOCAL_RANK
+                value: "0"
+            volumeMounts:
+              - mountPath: /mnt/pfs
+                name: pfs
+              - mountPath: /dev/shm
+                name: cache-volume
+          volumes:
+            - name: pfs
+              hostPath:
+                path: /mnt/pfs
+            - emptyDir:
+                medium: Memory
+              name: cache-volume
+          priorityClassName: normal
+          schedulerName: volcano

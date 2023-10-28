@@ -1,6 +1,6 @@
 name: mvdream
 tag: "${rmspace:${system.prompt_processor.prompt},_}"
-exp_root_dir: outputs/vast-model-rgb-normal-dmtet-0-0.3
+exp_root_dir: outputs/vast-model-rgb-normal-dmtet-0-0
 seed: 0
 
 
@@ -91,7 +91,7 @@ system:
     max_step_percent: 0.5
     n_multi_views: 4
     normal_pipeline_start_step: 0
-    normal_pipeline_prop: 0.3
+    normal_pipeline_prop: 0
 
 
   loggers:
@@ -103,7 +103,7 @@ system:
   loss:
     lambda_sd: 1.
     lambda_normal_consistency: 1000.
-    lambda_laplacian_smoothness: 100.
+    # lambda_laplacian_smoothness: 100.
 
   optimizer:
     name: Adam

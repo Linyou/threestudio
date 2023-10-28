@@ -43,6 +43,7 @@ class MultiViewUnifiedGuidance(BaseModule):
 
         pretrained_model_name_or_path: str = "/mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b/"
         unet_path: str = "/mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion20M/"
+        unet_path_normal: str = "/mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-normal/"
         guidance_scale: float = 100.0
         weighting_strategy: str = "dreamfusion"
         view_dependent_prompting: bool = False
@@ -56,6 +57,8 @@ class MultiViewUnifiedGuidance(BaseModule):
         recon_std_rescale: float = 0.5
 
         camera_condition_type: str = "rotation"
+        normal_pipeline_start_step: int = 10000
+        normal_pipeline_prop: float = 0.
 
         return_rgb_1step_orig: bool = False
         return_rgb_multistep_orig: bool = False
@@ -80,6 +83,7 @@ class MultiViewUnifiedGuidance(BaseModule):
         @dataclass
         class NonTrainableModules:
             pipe: TuneAVideoPipeline
+            pipe_normal: TuneAVideoPipeline
             pipe_phi: Optional[TuneAVideoPipeline] = None
             controlnet: Optional[ControlNetModel] = None
 
@@ -100,13 +104,21 @@ class MultiViewUnifiedGuidance(BaseModule):
         unet = UNet3DConditionModel.from_pretrained(
             self.cfg.unet_path, subfolder="unet", torch_dtype=self.weights_dtype
         ).to(self.device)
+        unet_normal = UNet3DConditionModel.from_pretrained(
+            self.cfg.unet_path_normal, subfolder="unet", torch_dtype=self.weights_dtype
+        ).to(self.device)
+
         pipe = TuneAVideoPipeline.from_pretrained(
             self.cfg.pretrained_model_name_or_path, unet=unet, **pipe_kwargs
+        ).to(self.device)
+        pipe_normal = TuneAVideoPipeline.from_pretrained(
+            self.cfg.pretrained_model_name_or_path, unet=unet_normal, **pipe_kwargs
         ).to(self.device)
 
         self.prepare_pipe(pipe)
         self.configure_pipe_token_merging(pipe)
-
+        self.prepare_pipe(pipe_normal)
+        self.configure_pipe_token_merging(pipe_normal)
         # phi network for VSD
         # introduce two trainable modules:
         # - self.camera_embedding
@@ -132,6 +144,7 @@ class MultiViewUnifiedGuidance(BaseModule):
 
         self._non_trainable_modules = NonTrainableModules(
             pipe=pipe,
+            pipe_normal=pipe_normal,
             pipe_phi=pipe_phi,
             controlnet=controlnet,
         )
@@ -139,6 +152,10 @@ class MultiViewUnifiedGuidance(BaseModule):
     @property
     def pipe(self) -> TuneAVideoPipeline:
         return self._non_trainable_modules.pipe
+
+    @property
+    def pipe_normal(self) -> TuneAVideoPipeline:
+        return self._non_trainable_modules.pipe_normal
 
     @property
     def pipe_phi(self) -> TuneAVideoPipeline:
@@ -286,6 +303,7 @@ class MultiViewUnifiedGuidance(BaseModule):
         azimuth: Float[Tensor, "B"],
         camera_distances: Float[Tensor, "B"],
         c2w: Float[Tensor, "B 4 4"],
+        normal_pipeline: bool=False,
     ) -> Float[Tensor, "B 4 Hl Wl"]:
         # batch_size = latents_noisy.shape[0]
         # batch_unet = batch_size // self.cfg.n_multi_views
@@ -319,12 +337,20 @@ class MultiViewUnifiedGuidance(BaseModule):
         )
 
         with torch.no_grad():
-            noise_pred = self.pipe.unet(
-                torch.cat([latents_multiview_noisy] * 2, dim=0),
-                torch.cat([t] * 2, dim=0),
-                encoder_hidden_states=text_embeddings,
-                camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
-            ).sample
+            if normal_pipeline:
+                noise_pred = self.pipe_normal.unet(
+                    torch.cat([latents_multiview_noisy] * 2, dim=0),
+                    torch.cat([t] * 2, dim=0),
+                    encoder_hidden_states=text_embeddings,
+                    camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
+                ).sample
+            else:
+                noise_pred = self.pipe.unet(
+                    torch.cat([latents_multiview_noisy] * 2, dim=0),
+                    torch.cat([t] * 2, dim=0),
+                    encoder_hidden_states=text_embeddings,
+                    camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
+                ).sample
 
         noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
@@ -338,14 +364,21 @@ class MultiViewUnifiedGuidance(BaseModule):
     def forward(
         self,
         rgb: Float[Tensor, "B H W C"],
+        normal: Float[Tensor, "B H W C"],
         prompt_utils: PromptProcessorOutput,
         elevation: Float[Tensor, "B"],
         azimuth: Float[Tensor, "B"],
         camera_distances: Float[Tensor, "B"],
         c2w: Float[Tensor, "B 4 4"],
         rgb_as_latents=False,
+        step = 0,
         **kwargs,
     ):
+        normal_pipeline = False
+        if step > self.cfg.normal_pipeline_start_step and random.random()<self.cfg.normal_pipeline_prop:
+            rgb = normal
+            normal_pipeline = True
+
         batch_size = rgb.shape[0]
         assert batch_size % self.cfg.n_multi_views == 0
         batch_unet = batch_size // self.cfg.n_multi_views
@@ -391,6 +424,7 @@ class MultiViewUnifiedGuidance(BaseModule):
             azimuth,
             camera_distances,
             c2w,
+            normal_pipeline
         )
 
         latents_1step_orig = (

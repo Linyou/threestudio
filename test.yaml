@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
-  name: mvdream-lyg-b-a-39
+  name: mvdream-lyg-b-a-50
 spec:
   pytorchReplicaSpecs:
     Master:
@@ -14,7 +14,7 @@ spec:
               requiredDuringSchedulingIgnoredDuringExecution:                
                 nodeSelectorTerms:                  
                   - matchExpressions:                      
-                    - key: "scattered-gpu-pool"                        
+                    - key: "regular-gpu-pool"                        
                       operator: Exists
           imagePullSecrets:
             - name: vast-secret
@@ -32,8 +32,8 @@ spec:
             command:
               - "/bin/sh"
               - "-c"
-              - "sleep inf"
-              #- "cd /mnt/pfs/users/liyangguang/vastcode/tune-a-video && export OMP_NUM_THREADS=1 && accelerate launch train_mvimage.py --config=configs/multiview-image.yaml "
+              # - "sleep inf"
+              - "cd /mnt/pfs/users/liyangguang/vastcode/threestudio && export OMP_NUM_THREADS=1 && python launch.py --config configs/mvdream-sd21-vast-rgb-normal.yaml --train --gpu 0 system.prompt_processor.prompt='a DSLR photo of a squirrel playing guitar'"
             env:
               - name: NCCL_DEBUG
                 value: INFO

@@ -1,7 +1,7 @@
 import random
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -28,43 +28,61 @@ from threestudio.utils.misc import C, cleanup, enable_gradient, parse_version
 from threestudio.utils.ops import perpendicular_component
 from threestudio.utils.typing import *
 
-from extern.mvdream.models.camera_utils import convert_opengl_to_blender, normalize_camera
-from extern.mvdream.models.unet import UNet3DConditionModel
-from extern.mvdream.pipelines.pipeline_tuneavideo import TuneAVideoPipeline
+from extern.mvdream_rn.models.unet import UNet3DConditionModel
+from extern.mvdream_rn.pipelines.pipeline_tuneavideo import TuneAVideoPipeline
 from einops import rearrange
-import numpy as np
 
-@threestudio.register("multiview-unified-guidance")
+def normalize_camera(camera_matrix):
+    ''' normalize the camera location onto a unit-sphere'''
+    if isinstance(camera_matrix, np.ndarray):
+        camera_matrix = camera_matrix.reshape(-1,4,4)
+        translation = camera_matrix[:,:3,3]
+        translation = translation / (np.linalg.norm(translation, axis=1, keepdims=True) + 1e-8)
+        camera_matrix[:,:3,3] = translation
+    else:
+        camera_matrix = camera_matrix.reshape(-1,4,4)
+        translation = camera_matrix[:,:3,3]
+        translation = translation / (torch.norm(translation, dim=1, keepdim=True) + 1e-8)
+        camera_matrix[:,:3,3] = translation
+    return camera_matrix
+
+@threestudio.register("multiview-unified-guidancev2")
 class MultiViewUnifiedGuidance(BaseModule):
     @dataclass
     class Config(BaseModule.Config):
         # guidance type, in ["sds", "vsd"]
         guidance_type: str = "sds"
-
+        normal_loss: bool = False
+        rgb_loss: bool = False
+        camera_condition_type: str = "rotation"
+        prob: float = 1.0
         pretrained_model_name_or_path: str = "/mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b/"
         unet_path: str = "/mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion20M/"
-        unet_path_normal: str = "/mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-normal/"
         guidance_scale: float = 100.0
         weighting_strategy: str = "dreamfusion"
-        view_dependent_prompting: bool = False
+        view_dependent_prompting: bool = True
         n_multi_views: int = 4
 
         min_step_percent: Any = 0.02
         max_step_percent: Any = 0.98
         grad_clip: Optional[Any] = None
 
-        recon_loss: bool = True
-        recon_std_rescale: float = 0.5
-
-        camera_condition_type: str = "rotation"
-        normal_pipeline_start_step: int = 10000
-        normal_pipeline_prop: float = 0.
-
         return_rgb_1step_orig: bool = False
         return_rgb_multistep_orig: bool = False
         n_rgb_multistep_orig_steps: int = 4
 
-        half_precision_weights: bool = False
+        # # TODO
+        # # controlnet
+        # controlnet_model_name_or_path: Optional[str] = None
+        # preprocessor: Optional[str] = None
+        # control_scale: float = 1.0
+
+        # # TODO
+        # # lora
+        # lora_model_name_or_path: Optional[str] = None
+
+        # efficiency-related configurations
+        half_precision_weights: bool = True
         enable_memory_efficient_attention: bool = False
         enable_sequential_cpu_offload: bool = False
         enable_attention_slicing: bool = False
@@ -72,6 +90,17 @@ class MultiViewUnifiedGuidance(BaseModule):
         token_merging: bool = False
         token_merging_params: Optional[dict] = field(default_factory=dict)
 
+        # # VSD configurations, only used when guidance_type is "vsd"
+        # vsd_phi_model_name_or_path: Optional[str] = None
+        # vsd_guidance_scale_phi: float = 1.0
+        # vsd_use_lora: bool = True
+        # vsd_lora_cfg_training: bool = False
+        # vsd_lora_n_timestamp_samples: int = 1
+        # vsd_use_camera_condition: bool = True
+        # # camera condition type, in ["extrinsics", "mvp", "spherical"]
+        # vsd_camera_condition_type: Optional[str] = "extrinsics"
+        rgb_loss_scale: float = 1.0
+        normal_loss_scale: float = 1.0
 
     cfg: Config
 
@@ -83,7 +112,6 @@ class MultiViewUnifiedGuidance(BaseModule):
         @dataclass
         class NonTrainableModules:
             pipe: TuneAVideoPipeline
-            pipe_normal: TuneAVideoPipeline
             pipe_phi: Optional[TuneAVideoPipeline] = None
             controlnet: Optional[ControlNetModel] = None
 
@@ -104,21 +132,13 @@ class MultiViewUnifiedGuidance(BaseModule):
         unet = UNet3DConditionModel.from_pretrained(
             self.cfg.unet_path, subfolder="unet", torch_dtype=self.weights_dtype
         ).to(self.device)
-        unet_normal = UNet3DConditionModel.from_pretrained(
-            self.cfg.unet_path_normal, subfolder="unet", torch_dtype=self.weights_dtype
-        ).to(self.device)
-
         pipe = TuneAVideoPipeline.from_pretrained(
             self.cfg.pretrained_model_name_or_path, unet=unet, **pipe_kwargs
-        ).to(self.device)
-        pipe_normal = TuneAVideoPipeline.from_pretrained(
-            self.cfg.pretrained_model_name_or_path, unet=unet_normal, **pipe_kwargs
         ).to(self.device)
 
         self.prepare_pipe(pipe)
         self.configure_pipe_token_merging(pipe)
-        self.prepare_pipe(pipe_normal)
-        self.configure_pipe_token_merging(pipe_normal)
+
         # phi network for VSD
         # introduce two trainable modules:
         # - self.camera_embedding
@@ -144,7 +164,6 @@ class MultiViewUnifiedGuidance(BaseModule):
 
         self._non_trainable_modules = NonTrainableModules(
             pipe=pipe,
-            pipe_normal=pipe_normal,
             pipe_phi=pipe_phi,
             controlnet=controlnet,
         )
@@ -152,10 +171,6 @@ class MultiViewUnifiedGuidance(BaseModule):
     @property
     def pipe(self) -> TuneAVideoPipeline:
         return self._non_trainable_modules.pipe
-
-    @property
-    def pipe_normal(self) -> TuneAVideoPipeline:
-        return self._non_trainable_modules.pipe_normal
 
     @property
     def pipe_phi(self) -> TuneAVideoPipeline:
@@ -287,14 +302,103 @@ class MultiViewUnifiedGuidance(BaseModule):
         # Note: the input of threestudio is already blender coordinate system
         # camera = convert_opengl_to_blender(camera)
         if self.cfg.camera_condition_type == "rotation": # normalized camera
-            camera = normalize_camera(camera)[...,:12]
-            camera = camera.flatten(start_dim=1)
+            camera = normalize_camera(camera)
+            # camera = camera.flatten(start_dim=1)
         else:
             raise NotImplementedError(f"Unknown camera_condition_type={self.cfg.camera_condition_type}")
         return camera
 
-
     def get_eps_pretrain(
+        self,
+        latents_noisy: Float[Tensor, "B 4 Hl Wl"],
+        latents_noisy_normal: Float[Tensor, "B 4 Hl Wl"],
+        t: Int[Tensor, "B"],
+        prompt_utils: PromptProcessorOutput,
+        elevation: Float[Tensor, "B"],
+        azimuth: Float[Tensor, "B"],
+        camera_distances: Float[Tensor, "B"],
+        c2w: Float[Tensor, "B 4 4"],
+        pred_rgb = True,
+        pred_normal=True,
+    ) -> Float[Tensor, "B 4 Hl Wl"]:
+        # batch_size = latents_noisy.shape[0]
+        # batch_unet = batch_size // self.cfg.n_multi_views
+        latents_multiview_noisy: Float[Tensor, "Bdivn 4 Nv Hl Wl"] = rearrange(
+            latents_noisy, "(b nv) c h w -> b c nv h w", nv=self.cfg.n_multi_views
+        )
+        latents_multiview_noisy_normal: Float[Tensor, "Bdivn 4 Nv Hl Wl"] = rearrange(
+            latents_noisy_normal, "(b nv) c h w -> b c nv h w", nv=self.cfg.n_multi_views
+        )
+
+        # camera_matrixs: Float[Tensor, "Bdivn Nv 12"] = rearrange(
+        #     c2w[:, :3, :],
+        #     "(b nv) three four -> b nv (three four)",
+        #     nv=self.cfg.n_multi_views,
+        # )
+        camera_matrixs = c2w
+
+        assert not prompt_utils.use_perp_neg
+        elevation_multiview = rearrange(
+            elevation, "(b nv) -> b nv", nv=self.cfg.n_multi_views
+        )
+        text_embeddings = prompt_utils.get_text_embeddings(
+            elevation_multiview[:, 0], None, None, self.cfg.view_dependent_prompting
+        )
+        if camera_matrixs is not None:
+            camera_matrixs = self.get_camera_cond(camera_matrixs)
+            camera_matrixs: Float[Tensor, "Bdivn Nv 12"] = rearrange(
+                camera_matrixs[:, :3, :],
+                "(b nv) three four -> b nv (three four)",
+                nv=self.cfg.n_multi_views,
+            )
+        with torch.no_grad():
+            if pred_rgb and pred_normal:
+                class_labels = torch.tensor([0,1]).cuda()
+                latents_multiview_noisy = torch.cat([latents_multiview_noisy, latents_multiview_noisy_normal], dim=2)
+            elif pred_normal:
+                class_labels = torch.tensor([1]).cuda()
+                latents_multiview_noisy = latents_multiview_noisy_normal
+            else:
+                class_labels = torch.tensor([0]).cuda()
+            noise_pred = self.pipe.unet(
+                torch.cat([latents_multiview_noisy] * 2, dim=0),
+                torch.cat([t] * 2, dim=0),
+                encoder_hidden_states=text_embeddings,
+                camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
+                class_labels=class_labels,
+                category_crossattn=True,
+                cam_emb_silu=True,
+                only_label_normal=True
+
+            ).sample
+            # noise_pred = self.forward_unet(
+            #     self.pipe.unet,
+            #     torch.cat([latents_multiview_noisy] * 2, dim=0),
+            #     torch.cat([t] * 2, dim=0),
+            #     encoder_hidden_states=text_embeddings,
+            #     camera_matrixs=camera_matrixs,
+            #     velocity_to_epsilon=self.pipe.scheduler.config.prediction_type
+            #     == "v_prediction",
+            # )
+
+        noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
+            noise_pred_text - noise_pred_uncond
+        )
+        if pred_rgb and pred_normal:
+            noise_pred, noise_pred_normal = noise_pred.chunk(2, dim=2)
+            noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
+            noise_pred_normal = rearrange(noise_pred_normal, "b c nv h w -> (b nv) c h w")
+        elif pred_rgb:
+            noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
+            noise_pred_normal = None
+        elif pred_normal:
+            noise_pred_normal = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
+            noise_pred = None
+        # noise_pred = torch.cat([noise_pred,noise_pred_normal],dim=0)
+        return noise_pred, noise_pred_normal
+
+    def get_eps_phi(
         self,
         latents_noisy: Float[Tensor, "B 4 Hl Wl"],
         t: Int[Tensor, "B"],
@@ -302,64 +406,102 @@ class MultiViewUnifiedGuidance(BaseModule):
         elevation: Float[Tensor, "B"],
         azimuth: Float[Tensor, "B"],
         camera_distances: Float[Tensor, "B"],
-        c2w: Float[Tensor, "B 4 4"],
-        normal_pipeline: bool=False,
+        camera_condition: Float[Tensor, "B ..."],
     ) -> Float[Tensor, "B 4 Hl Wl"]:
-        # batch_size = latents_noisy.shape[0]
-        # batch_unet = batch_size // self.cfg.n_multi_views
+        batch_size = latents_noisy.shape[0]
 
-        latents_multiview_noisy: Float[Tensor, "Bdivn 4 Nv Hl Wl"] = rearrange(
-            latents_noisy, "(b nv) c h w -> b c nv h w", nv=self.cfg.n_multi_views
-        ) #[2, 4, 4, 32, 32]
-
-        camera = self.get_camera_cond(c2w)
-        camera_matrixs: Float[Tensor, "Bdivn Nv 12"] = rearrange(
-            camera,
-            "(b nv) three -> b nv three",
-            nv=self.cfg.n_multi_views,
-        ) #[2, 4, 12]
-
-        # import pdb
-        # pdb.set_trace()
-        # camera_matrixs: Float[Tensor, "Bdivn Nv 12"] = rearrange(
-        #     c2w[:, :3, :],
-        #     "(b nv) three four -> b nv (three four)",
-        #     nv=self.cfg.n_multi_views,
-        # )
-
-        assert not prompt_utils.use_perp_neg
-
-        elevation_multiview = rearrange(
-            elevation, "(b nv) -> b nv", nv=self.cfg.n_multi_views
-        )
-        text_embeddings = prompt_utils.get_text_embeddings( #4, 77, 1024
-            elevation_multiview[:, 0], None, None, self.cfg.view_dependent_prompting
-        )
-
+        # not using view-dependent prompting in LoRA
+        text_embeddings, _ = prompt_utils.get_text_embeddings(
+            elevation, azimuth, camera_distances, view_dependent_prompting=False
+        ).chunk(2)
         with torch.no_grad():
-            if normal_pipeline:
-                noise_pred = self.pipe_normal.unet(
-                    torch.cat([latents_multiview_noisy] * 2, dim=0),
-                    torch.cat([t] * 2, dim=0),
-                    encoder_hidden_states=text_embeddings,
-                    camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
-                ).sample
-            else:
-                noise_pred = self.pipe.unet(
-                    torch.cat([latents_multiview_noisy] * 2, dim=0),
-                    torch.cat([t] * 2, dim=0),
-                    encoder_hidden_states=text_embeddings,
-                    camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
-                ).sample
+            noise_pred = self.forward_unet(
+                self.pipe_phi.unet,
+                torch.cat([latents_noisy] * 2, dim=0),
+                torch.cat([t] * 2, dim=0),
+                encoder_hidden_states=torch.cat([text_embeddings] * 2, dim=0),
+                class_labels=torch.cat(
+                    [
+                        camera_condition.view(batch_size, -1),
+                        torch.zeros_like(camera_condition.view(batch_size, -1)),
+                    ],
+                    dim=0,
+                )
+                if self.cfg.vsd_use_camera_condition
+                else None,
+                cross_attention_kwargs={"scale": 1.0},
+                velocity_to_epsilon=self.pipe_phi.scheduler.config.prediction_type
+                == "v_prediction",
+            )
 
-        noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-        noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
-            noise_pred_text - noise_pred_uncond
+        noise_pred_camera, noise_pred_uncond = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + self.cfg.vsd_guidance_scale_phi * (
+            noise_pred_camera - noise_pred_uncond
         )
-            
-        noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
 
         return noise_pred
+
+    def train_phi(
+        self,
+        latents: Float[Tensor, "B 4 Hl Wl"],
+        prompt_utils: PromptProcessorOutput,
+        elevation: Float[Tensor, "B"],
+        azimuth: Float[Tensor, "B"],
+        camera_distances: Float[Tensor, "B"],
+        camera_condition: Float[Tensor, "B ..."],
+    ):
+        B = latents.shape[0]
+        latents = latents.detach().repeat(
+            self.cfg.vsd_lora_n_timestamp_samples, 1, 1, 1
+        )
+
+        num_train_timesteps = self.pipe_phi.scheduler.config.num_train_timesteps
+        t = torch.randint(
+            int(num_train_timesteps * 0.0),
+            int(num_train_timesteps * 1.0),
+            [B * self.cfg.vsd_lora_n_timestamp_samples],
+            dtype=torch.long,
+            device=self.device,
+        )
+
+        noise = torch.randn_like(latents)
+        latents_noisy = self.pipe_phi.scheduler.add_noise(latents, noise, t)
+        if self.pipe_phi.scheduler.config.prediction_type == "epsilon":
+            target = noise
+        elif self.pipe_phi.scheduler.prediction_type == "v_prediction":
+            target = self.pipe_phi.scheduler.get_velocity(latents, noise, t)
+        else:
+            raise ValueError(
+                f"Unknown prediction type {self.pipe_phi.scheduler.prediction_type}"
+            )
+
+        # not using view-dependent prompting in LoRA
+        text_embeddings, _ = prompt_utils.get_text_embeddings(
+            elevation, azimuth, camera_distances, view_dependent_prompting=False
+        ).chunk(2)
+
+        if (
+            self.cfg.vsd_use_camera_condition
+            and self.cfg.vsd_lora_cfg_training
+            and random.random() < 0.1
+        ):
+            camera_condition = torch.zeros_like(camera_condition)
+
+        noise_pred = self.forward_unet(
+            self.pipe_phi.unet,
+            latents_noisy,
+            t,
+            encoder_hidden_states=text_embeddings.repeat(
+                self.cfg.vsd_lora_n_timestamp_samples, 1, 1
+            ),
+            class_labels=camera_condition.view(B, -1).repeat(
+                self.cfg.vsd_lora_n_timestamp_samples, 1
+            )
+            if self.cfg.vsd_use_camera_condition
+            else None,
+            cross_attention_kwargs={"scale": 1.0},
+        )
+        return F.mse_loss(noise_pred.float(), target.float(), reduction="mean")
 
     def forward(
         self,
@@ -373,24 +515,21 @@ class MultiViewUnifiedGuidance(BaseModule):
         rgb_as_latents=False,
         step = 0,
         **kwargs,
-    ):
-        normal_pipeline = False
-        if step > self.cfg.normal_pipeline_start_step and random.random()<self.cfg.normal_pipeline_prop:
+    ):  
+        pred_rgb = True
+        pred_normal = True
+        if rgb is None:
+            pred_rgb = False
             rgb = normal
-            normal_pipeline = True
-        # if step < self.cfg.normal_pipeline_start_step:
-        #     rgb = normal
-        #     normal_pipeline = True
-        # else:
-        #     if random.random()<self.cfg.normal_pipeline_prop:
-        #         rgb = normal
-        #         normal_pipeline = True
-
+        if normal is None:
+            pred_normal = False
+            normal = rgb
         batch_size = rgb.shape[0]
         assert batch_size % self.cfg.n_multi_views == 0
-        batch_unet = batch_size // self.cfg.n_multi_views
+        batch_unet = batch_size // (self.cfg.n_multi_views)
 
         rgb_BCHW = rgb.permute(0, 3, 1, 2)
+        normal_BCHW = normal.permute(0, 3, 1, 2)
         latents: Float[Tensor, "B 4 Hl Wl"]
         if rgb_as_latents:
             # treat input rgb as latents
@@ -398,14 +537,24 @@ class MultiViewUnifiedGuidance(BaseModule):
             latents = F.interpolate(
                 rgb_BCHW, (32, 32), mode="bilinear", align_corners=False
             )
+            latents_normal = F.interpolate(
+                normal_BCHW, (32, 32), mode="bilinear", align_corners=False
+            )
         else:
             # treat input rgb as rgb
             # input rgb should be in range [0, 1]
             rgb_BCHW = F.interpolate(
                 rgb_BCHW, (256, 256), mode="bilinear", align_corners=False
             )
+            normal_BCHW = F.interpolate(
+                normal_BCHW, (256, 256), mode="bilinear", align_corners=False
+            )
             # encode image into latents with vae
             latents = self.vae_encode(self.pipe.vae, rgb_BCHW * 2.0 - 1.0)
+            latents_normal = self.vae_encode(self.pipe.vae, normal_BCHW * 2.0 - 1.0)
+            # alpha = 0.5
+            # latents_normal = latents_normal * alpha + latents * (1-alpha)
+            # latents = torch.cat([latents, latents_normal], dim = 0)
         # sample timestep
         # use the same timestep for each batch
         assert self.min_step is not None and self.max_step is not None
@@ -417,39 +566,78 @@ class MultiViewUnifiedGuidance(BaseModule):
             dtype=torch.long,
             device=self.device,
         )
-        t = t_one.repeat(batch_size) #8
-
+        t = t_one.repeat(batch_size)
         # sample noise
-        noise = torch.randn_like(latents) #[8, 4, 32, 32]
-        latents_noisy = self.scheduler.add_noise(latents, noise, t) #[8, 4, 32, 32]
-
-        eps_pretrain = self.get_eps_pretrain(
+        noise = torch.randn_like(latents)
+        noise_normal = torch.randn_like(latents_normal)
+        latents_noisy = self.scheduler.add_noise(latents, noise, t)
+        latents_noisy_normal = self.scheduler.add_noise(latents_normal, noise_normal, t)
+        eps_pretrain, eps_pretrain_normal = self.get_eps_pretrain(
             latents_noisy,
+            latents_noisy_normal,
             t_one.repeat(batch_unet),
             prompt_utils,
             elevation,
             azimuth,
             camera_distances,
             c2w,
-            normal_pipeline
+            pred_rgb,
+            pred_normal,
         )
-
-        latents_1step_orig = (
-            1
-            / self.alphas[t].view(-1, 1, 1, 1)
-            * (latents_noisy - self.sigmas[t].view(-1, 1, 1, 1) * eps_pretrain)
-        ).detach()
-
+        if pred_rgb:
+            latents_1step_orig = (
+                1
+                / self.alphas[t].view(-1, 1, 1, 1)
+                * (latents_noisy - self.sigmas[t].view(-1, 1, 1, 1) * eps_pretrain)
+            ).detach()
+        else:
+            latents_1step_orig = (
+                1
+                / self.alphas[t].view(-1, 1, 1, 1)
+                * (latents_noisy_normal - self.sigmas[t].view(-1, 1, 1, 1) * eps_pretrain_normal)
+            ).detach()
         if self.cfg.guidance_type == "sds":
             eps_phi = noise
-        else:
-            raise ValueError(
-                f"Unknown guidance_type: {self.cfg.guidance_type}"
+        elif self.cfg.guidance_type == "vsd":
+            if self.cfg.vsd_camera_condition_type == "extrinsics":
+                camera_condition = c2w
+            elif self.cfg.vsd_camera_condition_type == "mvp":
+                camera_condition = mvp_mtx
+            elif self.cfg.vsd_camera_condition_type == "spherical":
+                camera_condition = torch.stack(
+                    [
+                        torch.deg2rad(elevation),
+                        torch.sin(torch.deg2rad(azimuth)),
+                        torch.cos(torch.deg2rad(azimuth)),
+                        camera_distances,
+                    ],
+                    dim=-1,
+                )
+            else:
+                raise ValueError(
+                    f"Unknown camera_condition_type {self.cfg.vsd_camera_condition_type}"
+                )
+            eps_phi = self.get_eps_phi(
+                latents_noisy,
+                t,
+                prompt_utils,
+                elevation,
+                azimuth,
+                camera_distances,
+                camera_condition,
+            )
+
+            loss_train_phi = self.train_phi(
+                latents,
+                prompt_utils,
+                elevation,
+                azimuth,
+                camera_distances,
+                camera_condition,
             )
 
         if self.cfg.weighting_strategy == "dreamfusion":
-            # w = (1.0 - self.alphas[t]).view(-1, 1, 1, 1)
-            w = (1.0 - self.alphas_cumprod[t]).view(-1, 1, 1, 1)
+            w = (1.0 - self.alphas[t]).view(-1, 1, 1, 1)
         elif self.cfg.weighting_strategy == "uniform":
             w = 1.0
         elif self.cfg.weighting_strategy == "fantasia3d":
@@ -458,18 +646,40 @@ class MultiViewUnifiedGuidance(BaseModule):
             raise ValueError(
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
             )
-
-        grad = w * (eps_pretrain - eps_phi)
-
+        if self.cfg.normal_loss:
+            grad_normal = w * (eps_pretrain_normal - noise_normal)
+        else:
+            grad_normal = 0.0
+        if self.cfg.rgb_loss:
+            grad_rgb = w * (eps_pretrain - eps_phi)
+        else:
+            grad_rgb = 0.0
         if self.grad_clip_val is not None:
-            grad = grad.clamp(-self.grad_clip_val, self.grad_clip_val)
-        grad = torch.nan_to_num(grad)
-
+            if self.cfg.normal_loss:
+                grad_normal = grad_normal.clamp(-self.grad_clip_val, self.grad_clip_val)
+            if self.cfg.rgb_loss:
+                grad_rgb = grad_rgb.clamp(-self.grad_clip_val, self.grad_clip_val)
         # reparameterization trick:
         # d(loss)/d(latents) = latents - target = latents - (latents - grad) = grad
-        target = (latents - grad).detach()
-        loss_sd = 0.5 * F.mse_loss(latents, target, reduction="sum") / batch_size
+        if self.cfg.normal_loss:
+            target_normal = (latents_normal - grad_normal).detach()
+            loss_sd_normal = 0.5 * F.mse_loss(latents_normal, target_normal, reduction="sum") / batch_size
+        else:
+            loss_sd_normal = 0.0
+        if self.cfg.rgb_loss:
+            target_rgb = (latents - grad_rgb).detach()
+            loss_sd_rgb = 0.5 * F.mse_loss(latents, target_rgb, reduction="sum") / batch_size
+        else:
+            loss_sd_rgb = 0.0
 
+        if self.cfg.prob ==1.0:
+            loss_sd = self.cfg.rgb_loss_scale*loss_sd_rgb + self.cfg.normal_loss_scale*loss_sd_normal
+        elif random.random()<self.cfg.prob:
+            loss_sd = loss_sd_rgb
+        else:
+            loss_sd = loss_sd_normal
+
+        grad = self.cfg.rgb_loss_scale*grad_rgb + self.cfg.normal_loss_scale*grad_normal
         guidance_out = {
             "loss_sd": loss_sd,
             "grad_norm": grad.norm(),
@@ -489,16 +699,41 @@ class MultiViewUnifiedGuidance(BaseModule):
                     self.pipe.vae, latents_1step_orig
                 ).permute(0, 2, 3, 1)
             guidance_out.update({"rgb_1step_orig": rgb_1step_orig})
-            import pdb;pdb.set_trace()
-            import cv2 
-            import numpy as np    
-            tmp = rgb_1step_orig.detach().cpu().numpy()
-            rgb_o0 = np.uint8(tmp[0, :, :, :] * 255)
-            rgb_o1 = np.uint8(tmp[1, :, :, :] * 255)
-            cv2.imwrite('debug/step1_0.jpg', rgb_o0)
-            cv2.imwrite('debug/step1_0.jpg', rgb_o1)
-            exit()
+        
         if self.cfg.return_rgb_multistep_orig:
+        #     camera_matrixs = rearrange(
+        #     c2w[:, :3, :],
+        #     "(b nv) three four -> b nv (three four)",
+        #     nv=self.cfg.n_multi_views,
+        # )[0]
+        #     latents_multiview_noisy = rearrange(
+        #     latents_noisy, "(b nv) c h w -> b c nv h w", nv=self.cfg.n_multi_views
+        #     )
+        #     latents_multiview_noisy_normal = rearrange(
+        #     latents_noisy_normal, "(b nv) c h w -> b c nv h w", nv=self.cfg.n_multi_views
+        #     )
+        #     import pdb;pdb.set_trace()
+        #     latents = torch.cat([latents_multiview_noisy[0].unsqueeze(0), latents_multiview_noisy_normal[0].unsqueeze(0)],dim=2)
+        #     videos = self.pipe(0, "a blue motorcycle", camera_matrixs=camera_matrixs, latents=latents, video_length=4, height=256, width=256, num_inference_steps=50, guidance_scale=100, pred_normal=True).videos
+        #     videos = rearrange(videos, "b c t h w -> t b c h w")
+        #     image_list = []
+        #     import torchvision
+        #     import numpy as np
+        #     from PIL import Image
+            
+        #     for i, x in enumerate(videos):
+        #         x = torchvision.utils.make_grid(x, nrow=1)
+        #         x = x.transpose(0, 1).transpose(1, 2).squeeze(-1)
+        #         x = (x * 255).numpy().astype(np.uint8)
+        #         image_list.append(x)
+        #     image_output_list = [Image.fromarray(img, mode='RGB') for img in image_list]
+        #     target = Image.new('RGB', (256 * len(videos), 256 * 1))
+        #     for row in range(1):
+        #         for col in range(len(videos)):
+        #             target.paste(image_output_list[len(videos)*row+col], (0 + 256*col, 0 + 256*row))
+            
+        #     target.save(f'test.jpg', quality=50)
+        #     import pdb;pdb.set_trace()
             with self.set_scheduler(
                 self.pipe,
                 DPMSolverSinglestepScheduler,

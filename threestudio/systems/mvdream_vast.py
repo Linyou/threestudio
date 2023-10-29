@@ -99,7 +99,7 @@ class MVDream(BaseLift3DSystem):
                 self.cfg.loss.lambda_normal_consistency
             )
             if self.C(self.cfg.loss.lambda_laplacian_smoothness) > 0:
-                import pdb;pdb.set_trace()
+                #import pdb;pdb.set_trace()
                 loss_laplacian_smoothness = out["mesh"].laplacian()
                 self.log("train/loss_laplacian_smoothness", loss_laplacian_smoothness)
                 loss += loss_laplacian_smoothness * self.C(

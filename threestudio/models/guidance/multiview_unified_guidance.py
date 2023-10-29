@@ -34,6 +34,9 @@ from extern.mvdream.pipelines.pipeline_tuneavideo import TuneAVideoPipeline
 from einops import rearrange
 import numpy as np
 
+import math
+import kornia as KR
+
 @threestudio.register("multiview-unified-guidance")
 class MultiViewUnifiedGuidance(BaseModule):
     @dataclass
@@ -71,6 +74,13 @@ class MultiViewUnifiedGuidance(BaseModule):
         enable_channels_last_format: bool = False
         token_merging: bool = False
         token_merging_params: Optional[dict] = field(default_factory=dict)
+        
+        unsharp_mask: Optional[
+            bool
+        ] = False
+        mix_factor: Optional[
+            float
+        ] = 0.1
 
 
     cfg: Config
@@ -353,6 +363,13 @@ class MultiViewUnifiedGuidance(BaseModule):
                 ).sample
 
         noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+        
+        # USE Unsharp
+        if self.cfg.unsharp_mask:
+            noise_pred_text = rearrange(noise_pred_text, "b c nv h w -> (b nv) c h w")
+            noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)
+            noise_pred_text = rearrange(noise_pred_text, "(b nv) c h w -> b c nv h w", nv=self.cfg.n_multi_views)
+        
         noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
@@ -375,16 +392,9 @@ class MultiViewUnifiedGuidance(BaseModule):
         **kwargs,
     ):
         normal_pipeline = False
-        if step > self.cfg.normal_pipeline_start_step and random.random()<self.cfg.normal_pipeline_prop:
+        if step > self.cfg.normal_pipeline_start_step and random.random()<self.normal_prop:
             rgb = normal
             normal_pipeline = True
-        # if step < self.cfg.normal_pipeline_start_step:
-        #     rgb = normal
-        #     normal_pipeline = True
-        # else:
-        #     if random.random()<self.cfg.normal_pipeline_prop:
-        #         rgb = normal
-        #         normal_pipeline = True
 
         batch_size = rgb.shape[0]
         assert batch_size % self.cfg.n_multi_views == 0
@@ -546,6 +556,28 @@ class MultiViewUnifiedGuidance(BaseModule):
             )
 
         return guidance_out
+    
+    
+    def apply_unsharp_mask(self, pred_noise, t, cfg_scale=100, kernel_size=3):
+        denoising_sigma = self.t_to_sigma(t)
+        cond_scale_factor = min(0.02 * cfg_scale, 0.65)
+        usm_sigma = torch.clamp(
+            1 + denoising_sigma[[0]] * cond_scale_factor,
+            min=1e-6)
+        
+        sharpened = KR.filters.unsharp_mask(
+            pred_noise,
+            (kernel_size, kernel_size),
+            (usm_sigma, usm_sigma),
+            border_type='reflect'
+        )
+        pred_noise = pred_noise + (sharpened - pred_noise) * self.mix_factor
+        
+        return pred_noise
+
+    def t_to_sigma(self, t):
+        t = t/float(self.max_step + 1)
+        return (t * math.pi / 2).tan()
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         # clip grad for stable training as demonstrated in
@@ -560,3 +592,7 @@ class MultiViewUnifiedGuidance(BaseModule):
         self.max_step = int(
             self.num_train_timesteps * C(self.cfg.max_step_percent, epoch, global_step)
         )
+        
+        self.normal_prop = C(self.cfg.normal_pipeline_prop, epoch, global_step)
+
+        self.mix_factor = C(self.cfg.mix_factor, epoch, global_step)

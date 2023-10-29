@@ -14,7 +14,7 @@ spec:
               requiredDuringSchedulingIgnoredDuringExecution:                
                 nodeSelectorTerms:                  
                   - matchExpressions:                      
-                    - key: "regular-gpu-pool"                        
+                    - key: "scattered-gpu-pool"                        
                       operator: Exists
           imagePullSecrets:
             - name: vast-secret

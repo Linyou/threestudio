@@ -1,6 +1,6 @@
 name: mvdream
 tag: "${rmspace:${system.prompt_processor.prompt},_}"
-exp_root_dir: outputs/rgb_normal_d
+exp_root_dir: outputs/rgb_normal_label_normal_40_2
 seed: 0
 
 
@@ -8,11 +8,11 @@ data_type: "random-multiview-camera-datamodule"
 data:
   batch_size: [8, 4]
   n_view: ${system.guidance.n_multi_views}
-  # 0-4999: 64x64, >=5000: 512x512
+  # 0-4999: 64x64, >=3000: 512x512
   # this drastically reduces VRAM usage as empty space is pruned in early training
   width: [64, 256]
   height: [64, 256]
-  resolution_milestones: [5000]
+  resolution_milestones: [3000]
   camera_distance_range: [0.8, 1.0]
   fovy_range: [15, 60]
   elevation_range: [0, 30.]
@@ -54,25 +54,25 @@ system:
   #   requires_normal: True
   material_type: "diffuse-with-point-light-material"
   material:
-    ambient_only_steps: 5000
+    ambient_only_steps: 3000
     textureless_prob: 0.5
     ambient_light_color: [1.0, 1.0, 1.0]
     diffuse_light_color: [0.0, 0.0, 0.0]
     soft_shading: true
     albedo_activation: sigmoid
 
-  background_type: "neural-environment-map-background"
-  background:
-    color_activation: sigmoid
-    # random_aug: false
-    share_aug_bg: true
-    # random_aug_prob: 0.5
-  
-  # background_type: "solid-color-background"
+  # background_type: "neural-environment-map-background"
   # background:
-  #   color: [0.5, 0.5, 0.5]
+  #   color_activation: sigmoid
+  #   # random_aug: false
+  #   share_aug_bg: true
+  #   # random_aug_prob: 0.5
+  
+  background_type: "solid-color-background"
+  background:
+    color: [0.5, 0.5, 0.5]
 
-  renderer_type: "nerf-volume-renderer"
+  renderer_type: "nerf-volume-renderer-gbg"
   renderer:
     radius: ${system.geometry.radius}
     num_samples_per_ray: 512
@@ -82,7 +82,7 @@ system:
   prompt_processor:
     pretrained_model_name_or_path: /mnt/pfs/share/pretrained_model/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1-base/snapshots/5ede9e4bf3e3fd1cb0ef2f7a3fff13ee514fdf06
     prompt: ???
-    # negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
+    negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
     # prompt_front: ${system.prompt_processor.prompt}
     # prompt_side: ${system.prompt_processor.prompt}
     # prompt_back: ${system.prompt_processor.prompt}
@@ -97,15 +97,15 @@ system:
     unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video-split/outputs/obj7w_laion5b_rgb_normal_label_normal
     guidance_scale: 50
     weighting_strategy: dreamfusion
-    min_step_percent: [0, 0.98, 0.02, 8000]
-    max_step_percent: [0, 0.98, 0.5, 8000]
+    min_step_percent: [0, 0.98, 0.02, 4000]
+    max_step_percent: [0, 0.98, 0.5, 4000]
     n_multi_views: 4
     view_dependent_prompting: false
     half_precision_weights: false
     normal_loss: True
     rgb_loss: True
-    rgb_loss_scale: 0.8
-    normal_loss_scale: 0.2
+    rgb_loss_scale: 0.7
+    normal_loss_scale: 0.3
     prob: 1.0 ##1.0 means loss=rgb_los+normal_loss, prob<1.0 means loss = rgb_loss or loss=normal_loss
     # return_rgb_1step_orig: true
 
@@ -117,7 +117,7 @@ system:
 
   loss:
     lambda_sd: 1.
-    lambda_orient: [0, 10., 1000., 5000]
+    lambda_orient: [0, 10., 600., 3000]
     # lambda_orient: 0.
     lambda_sparsity: 0.
     lambda_opaque: 0.
@@ -138,7 +138,7 @@ system:
         lr: 0.001
 
 trainer:
-  max_steps: 10000
+  max_steps: 5000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
   val_check_interval: 200

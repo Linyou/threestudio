@@ -300,6 +300,7 @@ class Mesh:
         # correct diagonal
         return torch.sparse_coo_tensor(idx, values, (V, V)).coalesce()
 
+    @torch.cuda.amp.autocast(dtype=torch.float32)
     def laplacian(self) -> Float[Tensor, ""]:
         with torch.no_grad():
             L = self._laplacian_uniform()

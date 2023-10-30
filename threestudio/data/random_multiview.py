@@ -216,22 +216,28 @@ class RandomMultiviewCameraIterableDataset(RandomCameraIterableDataset):
         )
         c2w[:, 3, 3] = 1.0
 
-        # get directions by dividing directions_unit_focal by focal length
-        focal_length: Float[Tensor, "B"] = 0.5 * self.height / torch.tan(0.5 * fovy)
-        directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[
-            None, :, :, :
-        ].repeat(self.batch_size, 1, 1, 1)
-        directions[:, :, :, :2] = (
-            directions[:, :, :, :2] / focal_length[:, None, None, None]
-        )
+        if self.cfg.geometry_type != "dmtet":
+            # get directions by dividing directions_unit_focal by focal length
+            focal_length: Float[Tensor, "B"] = 0.5 * self.height / torch.tan(0.5 * fovy)
+            directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[
+                None, :, :, :
+            ].repeat(self.batch_size, 1, 1, 1)
+            directions[:, :, :, :2] = (
+                directions[:, :, :, :2] / focal_length[:, None, None, None]
+            )
 
-        # Importance note: the returned rays_d MUST be normalized!
-        rays_o, rays_d = get_rays(directions, c2w, keepdim=True)
+            # Importance note: the returned rays_d MUST be normalized!
+            rays_o, rays_d = get_rays(directions, c2w, keepdim=True)
+        else:
+            rays_o, rays_d = None, None
 
-        proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
-            fovy, self.width / self.height, 0.1, 1000.0
-        )  # FIXME: hard-coded near and far
-        mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
+        if self.cfg.geometry_type != "nerf":
+            proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
+                fovy, self.width / self.height, 0.1, 1000.0
+            )  # FIXME: hard-coded near and far
+            mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
+        else:
+            mvp_mtx = None
 
         return {
             "rays_o": rays_o,
@@ -247,7 +253,6 @@ class RandomMultiviewCameraIterableDataset(RandomCameraIterableDataset):
             "width": self.width,
             "fovy": fovy_deg,
         }
-
 
 @register("random-multiview-camera-datamodule")
 class RandomMultiviewCameraDataModule(pl.LightningDataModule):

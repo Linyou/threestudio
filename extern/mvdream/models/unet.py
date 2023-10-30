@@ -320,9 +320,6 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         timestep: Union[torch.Tensor, float, int],
         encoder_hidden_states: torch.Tensor,
         camera_matrixs: Optional[torch.Tensor] = None,
-        class_labels: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        return_dict: bool = True,
     ) -> Union[UNet3DConditionOutput, Tuple]:
         r"""
         Args:
@@ -341,6 +338,9 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         # The overall upsampling factor is equal to 2 ** (# num of upsampling layears).
         # However, the upsampling interpolation output size can be forced to fit any upsampling size
         # on the fly if necessary.
+        class_labels = None
+        attention_mask = None
+        
         default_overall_up_factor = 2**self.num_upsamplers
 
         # upsample size should be forwarded when sample is not a multiple of `default_overall_up_factor`
@@ -470,10 +470,11 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin):
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
 
-        if not return_dict:
-            return (sample,)
+        # if not return_dict:
+        #     return (sample,)
 
-        return UNet3DConditionOutput(sample=sample)
+        # return UNet3DConditionOutput(sample=sample)
+        return sample
 
     @classmethod
     def from_pretrained_2d(cls, pretrained_model_path, subfolder=None):

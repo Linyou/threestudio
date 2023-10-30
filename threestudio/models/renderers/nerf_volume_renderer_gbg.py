@@ -17,7 +17,7 @@ from threestudio.utils.ops import chunk_batch, get_activation, validate_empty_ra
 from threestudio.utils.typing import *
 
 
-@threestudio.register("nerf-volume-renderer-lbg")
+@threestudio.register("nerf-volume-renderer-gbg")
 class NeRFVolumeRenderer(VolumeRenderer):
     @dataclass
     class Config(VolumeRenderer.Config):

@@ -36,6 +36,21 @@ import numpy as np
 
 import math
 import kornia as KR
+from diffusers import AutoencoderTiny
+from threestudio.models.trt_model import TensorRTModel
+
+import time
+def timing_decorator(func):
+    def wrapper(*args, **kwargs):
+        torch.cuda.synchronize()
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        torch.cuda.synchronize()
+        end_time = time.time()
+        elapsed_time = (end_time - start_time) * 1000
+        print(f"Function {func.__name__} took {elapsed_time:.4f} microsecond to execute.")
+        return result
+    return wrapper
 
 @threestudio.register("multiview-unified-guidance")
 class MultiViewUnifiedGuidance(BaseModule):
@@ -45,8 +60,8 @@ class MultiViewUnifiedGuidance(BaseModule):
         guidance_type: str = "sds"
 
         pretrained_model_name_or_path: str = "/mnt/pfs/users/liuzexiang/Code/tune-a-video/.cache/huggingface/hub/models--CompVis--stable-diffusion-v1-4/snapshots/133a221b8aa7292a167afc5127cb63fb5005638b/"
-        unet_path: str = "/mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion20M/"
-        unet_path_normal: str = "/mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-normal/"
+        # unet_path: str = "/mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/render-group-1-2-laion-ga-3dword-gray-laion20M/"
+        # unet_path_normal: str = "/mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-normal/"
         guidance_scale: float = 100.0
         weighting_strategy: str = "dreamfusion"
         view_dependent_prompting: bool = False
@@ -111,20 +126,31 @@ class MultiViewUnifiedGuidance(BaseModule):
             "torch_dtype": self.weights_dtype,
         }
 
-        unet = UNet3DConditionModel.from_pretrained(
-            self.cfg.unet_path, subfolder="unet", torch_dtype=self.weights_dtype
-        ).to(self.device)
-        unet_normal = UNet3DConditionModel.from_pretrained(
-            self.cfg.unet_path_normal, subfolder="unet", torch_dtype=self.weights_dtype
-        ).to(self.device)
+        # unet = UNet3DConditionModel.from_pretrained(
+        #     self.cfg.unet_path, subfolder="unet", torch_dtype=self.weights_dtype
+        # ).to(self.device)
+        # unet_normal = UNet3DConditionModel.from_pretrained(
+        #     self.cfg.unet_path_normal, subfolder="unet", torch_dtype=self.weights_dtype
+        # ).to(self.device)
+        engine_path = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/rgb_fp16/unet-4view.plan"
+        engine_path_normal = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/normal_fp16/unet-4view.plan"
+        batch = 4
+        t1 = time.time()
+        unet = TensorRTModel(trt_engine_path=engine_path, shape_list=[(batch, 4, 4, 32, 32), (batch,), (batch, 77, 1024), (batch, 4, 12), (batch, 4, 4, 32, 32)])
+        unet_normal = TensorRTModel(trt_engine_path=engine_path_normal, shape_list=[(batch, 4, 4, 32, 32), (batch,), (batch, 77, 1024), (batch, 4, 12), (batch, 4, 4, 32, 32)])
+        t2 = time.time()
+        print(f"load trt time: {t2-t1}")
 
         pipe = TuneAVideoPipeline.from_pretrained(
-            self.cfg.pretrained_model_name_or_path, unet=unet, **pipe_kwargs
+            self.cfg.pretrained_model_name_or_path, **pipe_kwargs
         ).to(self.device)
         pipe_normal = TuneAVideoPipeline.from_pretrained(
-            self.cfg.pretrained_model_name_or_path, unet=unet_normal, **pipe_kwargs
+            self.cfg.pretrained_model_name_or_path, **pipe_kwargs
         ).to(self.device)
+        pipe.unet = unet
+        pipe_normal.unet = unet_normal
 
+        pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=self.weights_dtype).to(self.device)
         self.prepare_pipe(pipe)
         self.configure_pipe_token_merging(pipe)
         self.prepare_pipe(pipe_normal)
@@ -206,10 +232,10 @@ class MultiViewUnifiedGuidance(BaseModule):
         cleanup()
 
         pipe.vae.eval()
-        pipe.unet.eval()
+        # pipe.unet.eval()
 
         enable_gradient(pipe.vae, enabled=False)
-        enable_gradient(pipe.unet, enabled=False)
+        # enable_gradient(pipe.unet, enabled=False)
 
         # disable progress bar
         pipe.set_progress_bar_config(disable=True)
@@ -249,18 +275,27 @@ class MultiViewUnifiedGuidance(BaseModule):
             ].view(-1, 1, 1, 1)
         return pred.to(input_dtype)
 
+    # @torch.cuda.amp.autocast(enabled=False)
+    # def vae_encode(
+    #     self, vae: AutoencoderKL, imgs: Float[Tensor, "B 3 H W"], mode=False
+    # ) -> Float[Tensor, "B 4 Hl Wl"]:
+    #     # expect input in [-1, 1]
+    #     input_dtype = imgs.dtype
+    #     posterior = vae.encode(imgs.to(vae.dtype)).latent_dist
+    #     if mode:
+    #         latents = posterior.mode()
+    #     else:
+    #         latents = posterior.sample()
+    #     latents = latents * vae.config.scaling_factor
+    #     return latents.to(input_dtype)
+
+    @timing_decorator
     @torch.cuda.amp.autocast(enabled=False)
-    def vae_encode(
-        self, vae: AutoencoderKL, imgs: Float[Tensor, "B 3 H W"], mode=False
-    ) -> Float[Tensor, "B 4 Hl Wl"]:
-        # expect input in [-1, 1]
+    def encode_images(
+        self, imgs: Float[Tensor, "B 3 256 256"]
+    ) -> Float[Tensor, "B 4 32 32"]:
         input_dtype = imgs.dtype
-        posterior = vae.encode(imgs.to(vae.dtype)).latent_dist
-        if mode:
-            latents = posterior.mode()
-        else:
-            latents = posterior.sample()
-        latents = latents * vae.config.scaling_factor
+        latents = self.pipe.vae.encode(imgs.to(self.weights_dtype)).latents
         return latents.to(input_dtype)
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -303,7 +338,7 @@ class MultiViewUnifiedGuidance(BaseModule):
             raise NotImplementedError(f"Unknown camera_condition_type={self.cfg.camera_condition_type}")
         return camera
 
-
+    @timing_decorator
     def get_eps_pretrain(
         self,
         latents_noisy: Float[Tensor, "B 4 Hl Wl"],
@@ -345,22 +380,18 @@ class MultiViewUnifiedGuidance(BaseModule):
         text_embeddings = prompt_utils.get_text_embeddings( #4, 77, 1024
             elevation_multiview[:, 0], None, None, self.cfg.view_dependent_prompting
         )
-
+        trt_input_dict = {
+            "sample": torch.cat([latents_multiview_noisy] * 2, dim=0),
+            "timestep": torch.cat([t] * 2, dim=0),
+            "encoder_hidden_states": text_embeddings,
+            "camera": torch.cat([camera_matrixs] * 2, dim=0),
+        }
+        print(f"sample: {trt_input_dict['sample'].shape}, {normal_pipeline}")
         with torch.no_grad():
             if normal_pipeline:
-                noise_pred = self.pipe_normal.unet(
-                    torch.cat([latents_multiview_noisy] * 2, dim=0),
-                    torch.cat([t] * 2, dim=0),
-                    encoder_hidden_states=text_embeddings,
-                    camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
-                ).sample
+                noise_pred = self.pipe.unet(**trt_input_dict)['latent']
             else:
-                noise_pred = self.pipe.unet(
-                    torch.cat([latents_multiview_noisy] * 2, dim=0),
-                    torch.cat([t] * 2, dim=0),
-                    encoder_hidden_states=text_embeddings,
-                    camera_matrixs=torch.cat([camera_matrixs] * 2, dim=0),
-                ).sample
+                noise_pred = self.pipe_normal.unet(**trt_input_dict)['latent']
 
         noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
         
@@ -373,11 +404,11 @@ class MultiViewUnifiedGuidance(BaseModule):
         noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
             noise_pred_text - noise_pred_uncond
         )
-            
         noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
 
         return noise_pred
 
+    @timing_decorator
     def forward(
         self,
         rgb: Float[Tensor, "B H W C"],
@@ -415,7 +446,8 @@ class MultiViewUnifiedGuidance(BaseModule):
                 rgb_BCHW, (256, 256), mode="bilinear", align_corners=False
             )
             # encode image into latents with vae
-            latents = self.vae_encode(self.pipe.vae, rgb_BCHW * 2.0 - 1.0)
+            # latents = self.vae_encode(self.pipe.vae, rgb_BCHW * 2.0 - 1.0)
+            latents = self.encode_images(rgb_BCHW)
         # sample timestep
         # use the same timestep for each batch
         assert self.min_step is not None and self.max_step is not None
@@ -444,11 +476,12 @@ class MultiViewUnifiedGuidance(BaseModule):
             normal_pipeline
         )
 
-        latents_1step_orig = (
-            1
-            / self.alphas[t].view(-1, 1, 1, 1)
-            * (latents_noisy - self.sigmas[t].view(-1, 1, 1, 1) * eps_pretrain)
-        ).detach()
+        latents_1step_orig = None
+        # latents_1step_orig = (
+        #     1
+        #     / self.alphas[t].view(-1, 1, 1, 1)
+        #     * (latents_noisy - self.sigmas[t].view(-1, 1, 1, 1) * eps_pretrain)
+        # ).detach()
 
         if self.cfg.guidance_type == "sds":
             eps_phi = noise

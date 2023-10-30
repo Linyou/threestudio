@@ -9,8 +9,8 @@ data:
   n_view: ${system.guidance.n_multi_views}
   # 0-4999: 64x64, >=5000: 512x512
   # this drastically reduces VRAM usage as empty space is pruned in early training
-  width: 512
-  height: 512
+  width: 256
+  height: 256
   camera_distance_range: [0.8, 1.0]
   fovy_range: [15, 60]
   elevation_range: [0, 30.]
@@ -20,6 +20,7 @@ data:
   n_val_views: 4
   eval_camera_distance: 3.0
   eval_fovy_deg: 40.
+  geometry_type: "dmtet"
 
 system_type: "mvdream-system-vast"
 system:
@@ -85,9 +86,9 @@ system:
   guidance:
     guidance_type: sds
     pretrained_model_name_or_path: /mnt/pfs/share/pretrained_model/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1-base/snapshots/5ede9e4bf3e3fd1cb0ef2f7a3fff13ee514fdf06
-    unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/50w-laion-uni-2-07-2
+    # unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/50w-laion-uni-2-07-2
     # unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-basecolor-only
-    unet_path_normal: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-normal
+    # unet_path_normal: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-normal
     guidance_scale: 50.0
     weighting_strategy: dreamfusion
     min_step_percent: 0.02
@@ -128,9 +129,9 @@ system:
 
 trainer:
   max_steps: 1000
-  log_every_n_steps: 1
+  log_every_n_steps: ${trainer.max_steps}
   num_sanity_val_steps: 1
-  val_check_interval: 200
+  val_check_interval: ${trainer.max_steps}
   enable_progress_bar: true
   precision: 16-mixed
 

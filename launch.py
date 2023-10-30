@@ -121,7 +121,7 @@ def main(args, extras) -> None:
             ModelCheckpoint(
                 dirpath=os.path.join(cfg.trial_dir, "ckpts"), **cfg.checkpoint
             ),
-            LearningRateMonitor(logging_interval="step"),
+            # LearningRateMonitor(logging_interval="step"),
             CodeSnapshotCallback(
                 os.path.join(cfg.trial_dir, "code"), use_version=False
             ),
@@ -137,7 +137,7 @@ def main(args, extras) -> None:
                 ProgressCallback(save_path=os.path.join(cfg.trial_dir, "progress"))
             ]
         else:
-            callbacks += [CustomProgressBar(refresh_rate=1)]
+            callbacks += [CustomProgressBar(refresh_rate=100)]
 
     def write_to_text(file, lines):
         with open(file, "w") as f:

@@ -7,6 +7,18 @@ from threestudio.systems.base import BaseLift3DSystem
 from threestudio.utils.ops import binary_cross_entropy, dot
 from threestudio.utils.typing import *
 
+import time
+def timing_decorator(func):
+    def wrapper(*args, **kwargs):
+        torch.cuda.synchronize()
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        torch.cuda.synchronize()
+        end_time = time.time()
+        elapsed_time = (end_time - start_time) * 1000
+        print(f"Function {func.__name__} took {elapsed_time:.4f} microsecond to execute.")
+        return result
+    return wrapper
 
 @threestudio.register("mvdream-system-vast")
 class MVDream(BaseLift3DSystem):
@@ -24,6 +36,7 @@ class MVDream(BaseLift3DSystem):
         )
         self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
 
+    @timing_decorator
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         render_out = self.renderer(**batch)
         return {

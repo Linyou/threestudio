@@ -151,8 +151,9 @@ class MultiViewUnifiedGuidance(BaseModule):
         engine_path = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/rgb_normal_fp16/unet-4view.plan"
         batch = 4
         unet = TensorRTModel(trt_engine_path=engine_path, shape_list=[(batch, 4, 8, 32, 32), (batch,), (batch, 77, 1024), (batch, 4, 12), (2,), (batch, 4, 8, 32, 32)])
+        engine_path = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/rgb_fp16/unet-4view.plan"
         batch = 2
-        self.unet_256 = TensorRTModel(trt_engine_path=engine_path, shape_list=[(batch, 4, 8, 32, 32), (batch,), (batch, 77, 1024), (batch, 4, 12), (2,), (batch, 4, 8, 32, 32)])
+        self.unet_256 = TensorRTModel(trt_engine_path=engine_path, shape_list=[(batch, 4, 4, 32, 32), (batch,), (batch, 77, 1024), (batch, 4, 12), (batch, 4, 4, 32, 32)])
         pipe = TuneAVideoPipeline.from_pretrained(
             self.cfg.pretrained_model_name_or_path, **pipe_kwargs
         ).to(self.device)
@@ -360,6 +361,7 @@ class MultiViewUnifiedGuidance(BaseModule):
         c2w: Float[Tensor, "B 4 4"],
         pred_rgb = True,
         pred_normal=True,
+        rgb_pipeline=False,
     ) -> Float[Tensor, "B 4 Hl Wl"]:
         # batch_size = latents_noisy.shape[0]
         # batch_unet = batch_size // self.cfg.n_multi_views

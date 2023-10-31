@@ -38,7 +38,7 @@ class MVDream(BaseLift3DSystem):
 
     @timing_decorator
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
-        render_out = self.renderer(**batch)
+        render_out = self.renderer(**batch, step=self.true_global_step)
         return {
             **render_out,
         }
@@ -71,15 +71,17 @@ class MVDream(BaseLift3DSystem):
         if not self.cfg.refinement:
             if self.C(self.cfg.loss.lambda_orient) > 0:
                 if "normal" not in out:
-                    raise ValueError(
-                        "Normal is required for orientation loss, no normal is found in the output."
-                    )
-                loss_orient = (
-                    out["weights"].detach()
-                    * dot(out["normal"], out["t_dirs"]).clamp_min(0.0) ** 2
-                ).sum() / (out["opacity"] > 0).sum()
-                self.log("train/loss_orient", loss_orient)
-                loss += loss_orient * self.C(self.cfg.loss.lambda_orient)
+                    pass
+                    # raise ValueError(
+                    #     "Normal is required for orientation loss, no normal is found in the output."
+                    # )
+                else:
+                    loss_orient = (
+                        out["weights"].detach()
+                        * dot(out["normal"], out["t_dirs"]).clamp_min(0.0) ** 2
+                    ).sum() / (out["opacity"] > 0).sum()
+                    self.log("train/loss_orient", loss_orient)
+                    loss += loss_orient * self.C(self.cfg.loss.lambda_orient)
 
             if self.C(self.cfg.loss.lambda_sparsity) > 0:
                 loss_sparsity = (out["opacity"] ** 2 + 0.01).sqrt().mean()

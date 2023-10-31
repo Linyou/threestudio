@@ -30,6 +30,7 @@ class NeRFVolumeRenderer(VolumeRenderer):
 
         return_comp_normal: bool = False
         return_normal_perturb: bool = False
+        return_comp_normal_stop_step: int = 10000
 
         # in ["occgrid", "proposal", "importance"]
         estimator: str = "occgrid"
@@ -121,6 +122,7 @@ class NeRFVolumeRenderer(VolumeRenderer):
         rays_d: Float[Tensor, "B H W 3"],
         light_positions: Float[Tensor, "B 3"],
         bg_color: Optional[Tensor] = None,
+        step: Optional[Tensor] = None,
         **kwargs
     ) -> Dict[str, Float[Tensor, "..."]]:
         batch_size, height, width = rays_o.shape[:3]
@@ -132,7 +134,6 @@ class NeRFVolumeRenderer(VolumeRenderer):
             .reshape(-1, 3)
         )
         n_rays = rays_o_flatten.shape[0]
-
         if self.cfg.estimator == "occgrid":
             if not self.cfg.grid_prune:
                 with torch.no_grad():
@@ -279,6 +280,8 @@ class NeRFVolumeRenderer(VolumeRenderer):
         t_intervals = t_ends - t_starts
 
         if self.training:
+            if step > self.cfg.return_comp_normal_stop_step:
+                self.material.requires_normal = False
             geo_out = self.geometry(
                 positions, output_normal=self.material.requires_normal
             )
@@ -386,7 +389,7 @@ class NeRFVolumeRenderer(VolumeRenderer):
                 }
             )
             if "normal" in geo_out:
-                if self.cfg.return_comp_normal:
+                if self.cfg.return_comp_normal and step <= self.cfg.return_comp_normal_stop_step:
                     comp_normal: Float[Tensor, "Nr 3"] = nerfacc.accumulate_along_rays(
                         weights[..., 0],
                         values=geo_out["normal"],

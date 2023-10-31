@@ -1,6 +1,6 @@
 name: mvdream
 tag: "${rmspace:${system.prompt_processor.prompt},_}"
-exp_root_dir: outputs/vast-model-rgb-normal-dmtet-0-0.3
+exp_root_dir: outputs/vast-model-rgb-normal-dmtet-0-0.3-40-5
 
 
 data_type: "random-multiview-camera-datamodule"
@@ -27,6 +27,8 @@ system:
   refinement: true
   geometry_convert_from: ???
   geometry_convert_inherit_texture: true
+  geometry_convert_override:
+    isosurface_threshold: 15.0
   geometry_type: "tetrahedra-sdf-grid"
   geometry:
     radius: 1.0 # consistent with coarse
@@ -40,20 +42,26 @@ system:
       base_resolution: 16
       per_level_scale: 1.4472692374403782 # max resolution 4096
     fix_geometry: false # optimize grid sdf and deformation
-
+    
   # material_type: "no-material" # unused
   # material:
   #   n_output_dims: 3
   #   color_activation: sigmoid
   #   requires_normal: True
+  # material_type: "diffuse-with-point-light-material"
+  # material:
+  #   ambient_only_steps: 5000
+  #   textureless_prob: 0.5
+  #   ambient_light_color: [1.0, 1.0, 1.0]
+  #   diffuse_light_color: [0.0, 0.0, 0.0]
+  #   soft_shading: true
+  #   albedo_activation: sigmoid
+
   material_type: "diffuse-with-point-light-material"
   material:
-    ambient_only_steps: 5000
-    textureless_prob: 0.5
-    ambient_light_color: [1.0, 1.0, 1.0]
-    diffuse_light_color: [0.0, 0.0, 0.0]
+    ambient_only_steps: 0
     soft_shading: true
-    albedo_activation: sigmoid
+
   # material_type: "no-material" # unused
   # material:
   #   n_output_dims: 3
@@ -87,6 +95,7 @@ system:
     guidance_type: sds
     pretrained_model_name_or_path: /mnt/pfs/share/pretrained_model/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1-base/snapshots/5ede9e4bf3e3fd1cb0ef2f7a3fff13ee514fdf06
     # unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/50w-laion-uni-2-07-2
+    # unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-52w-rgb
     # unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-basecolor-only
     # unet_path_normal: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-normal
     guidance_scale: 50.0
@@ -96,7 +105,7 @@ system:
     n_multi_views: 4
     normal_pipeline_start_step: 0
     # normal_pipeline_prop: [0, 0.3, 0, 400]
-    normal_pipeline_prop: 0.3
+    normal_pipeline_prop: 0
 
 
   loggers:

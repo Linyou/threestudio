@@ -148,7 +148,7 @@ class MultiViewUnifiedGuidance(BaseModule):
         # unet = UNet3DConditionModel.from_pretrained(
         #     self.cfg.unet_path, subfolder="unet", torch_dtype=self.weights_dtype
         # ).to(self.device)
-        engine_path = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/rgb_normal_fp16/unet-4view.plan"
+        engine_path = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/rgb_normal_fp16_1031/unet-4view.plan"
         batch = 4
         unet = TensorRTModel(trt_engine_path=engine_path, shape_list=[(batch, 4, 8, 32, 32), (batch,), (batch, 77, 1024), (batch, 4, 12), (2,), (batch, 4, 8, 32, 32)])
         engine_path = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/rgb_fp16/unet-4view.plan"

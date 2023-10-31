@@ -1,0 +1,148 @@
+name: mvdream
+tag: "${rmspace:${system.prompt_processor.prompt},_}"
+exp_root_dir: outputs/vast-model-rgb-normal-dmtet-0-0.3-40-5
+
+
+data_type: "random-multiview-camera-datamodule"
+data:
+  batch_size: 8
+  n_view: ${system.guidance.n_multi_views}
+  # 0-4999: 64x64, >=5000: 512x512
+  # this drastically reduces VRAM usage as empty space is pruned in early training
+  width: 256
+  height: 256
+  camera_distance_range: [0.8, 1.0]
+  fovy_range: [15, 60]
+  elevation_range: [0, 30.]
+  camera_perturb: 0.
+  center_perturb: 0.
+  up_perturb: 0.
+  n_val_views: 4
+  eval_camera_distance: 3.0
+  eval_fovy_deg: 40.
+  geometry_type: "dmtet"
+
+system_type: "mvdream-system-vast"
+system:
+  refinement: true
+  geometry_convert_from: ???
+  geometry_convert_inherit_texture: true
+  geometry_type: "tetrahedra-sdf-grid"
+  geometry:
+    radius: 1.0 # consistent with coarse
+    isosurface_resolution: 256
+    isosurface_deformable_grid: true
+    pos_encoding_config: # consistent with coarse, no progressive band
+      otype: HashGrid
+      n_levels: 16
+      n_features_per_level: 2
+      log2_hashmap_size: 19
+      base_resolution: 16
+      per_level_scale: 1.4472692374403782 # max resolution 4096
+    fix_geometry: false # optimize grid sdf and deformation
+    
+  # material_type: "no-material" # unused
+  # material:
+  #   n_output_dims: 3
+  #   color_activation: sigmoid
+  #   requires_normal: True
+  # material_type: "diffuse-with-point-light-material"
+  # material:
+  #   ambient_only_steps: 5000
+  #   textureless_prob: 0.5
+  #   ambient_light_color: [1.0, 1.0, 1.0]
+  #   diffuse_light_color: [0.0, 0.0, 0.0]
+  #   soft_shading: true
+  #   albedo_activation: sigmoid
+
+  material_type: "diffuse-with-point-light-material"
+  material:
+    ambient_only_steps: 0
+    soft_shading: true
+
+  # material_type: "no-material" # unused
+  # material:
+  #   n_output_dims: 3
+  #   color_activation: sigmoid
+  #   requires_normal: True
+
+  # background_type: "neural-environment-map-background"
+  # background:
+  #   color_activation: sigmoid
+  #   # random_aug: true
+  #   share_aug_bg: True
+    # random_aug_prob: 0.5
+  background_type: "solid-color-background"
+  background:
+    color: [0.5, 0.5, 0.5]
+
+  renderer_type: "nvdiff-rasterizer-gbg"
+  renderer:
+    context_type: gl
+
+  prompt_processor_type: "stable-diffusion-prompt-processor"
+  prompt_processor:
+    pretrained_model_name_or_path: /mnt/pfs/share/pretrained_model/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1-base/snapshots/5ede9e4bf3e3fd1cb0ef2f7a3fff13ee514fdf06
+    prompt: ???
+    negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
+    front_threshold: 30.
+    back_threshold: 30.
+
+  guidance_type: multiview-unified-guidance
+  guidance:
+    guidance_type: sds
+    pretrained_model_name_or_path: /mnt/pfs/share/pretrained_model/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1-base/snapshots/5ede9e4bf3e3fd1cb0ef2f7a3fff13ee514fdf06
+    # unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/50w-laion-uni-2-07-2
+    # unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-52w-rgb
+    # unet_path: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-basecolor-only
+    # unet_path_normal: /mnt/pfs/users/liyangguang/vastcode/tune-a-video/outputs/vast-sketch-obj-33w-normal
+    guidance_scale: 50.0
+    weighting_strategy: dreamfusion
+    min_step_percent: 0.02
+    max_step_percent: 0.5
+    n_multi_views: 4
+    normal_pipeline_start_step: 0
+    # normal_pipeline_prop: [0, 0.3, 0, 400]
+    normal_pipeline_prop: 0
+
+
+  loggers:
+    wandb:
+      enable: false
+      project: "threestudio"
+      name: None
+
+  loss:
+    lambda_sd: 1.
+    lambda_normal_consistency: 10000.
+    lambda_laplacian_smoothness: 10000.
+
+  optimizer:
+    name: Adam
+    args:
+      lr: 0.01
+      betas: [0.9, 0.99]
+      eps: 1.e-15
+    geometry.encoding:
+      lr: 0.001
+    geometry.sdf:
+      lr: 0.01
+    geometry.deformation:
+      lr: 0.01
+    geometry.feature_network:
+      lr: 0.0001
+    background:
+      lr: 0.0001
+
+trainer:
+  max_steps: 1000
+  log_every_n_steps: ${trainer.max_steps}
+  num_sanity_val_steps: 1
+  val_check_interval: ${trainer.max_steps}
+  enable_progress_bar: true
+  precision: 16-mixed
+
+checkpoint:
+  save_last: true
+  save_top_k: -1
+  every_n_train_steps: ${trainer.max_steps}

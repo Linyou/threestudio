@@ -132,8 +132,8 @@ class MultiViewUnifiedGuidance(BaseModule):
         # unet_normal = UNet3DConditionModel.from_pretrained(
         #     self.cfg.unet_path_normal, subfolder="unet", torch_dtype=self.weights_dtype
         # ).to(self.device)
-        engine_path = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/rgb_fp16/unet-4view.plan"
-        engine_path_normal = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/normal_fp16/unet-4view.plan"
+        engine_path = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/rgb_fp16_1031/unet-4view.plan"
+        engine_path_normal = "/mnt/pfs/users/liuxuebo/project/threestudio_unidream2/trt/normal_fp16_v2/unet-4view.plan"
         batch = 4
         t1 = time.time()
         unet = TensorRTModel(trt_engine_path=engine_path, shape_list=[(batch, 4, 4, 32, 32), (batch,), (batch, 77, 1024), (batch, 4, 12), (batch, 4, 4, 32, 32)])
@@ -389,9 +389,9 @@ class MultiViewUnifiedGuidance(BaseModule):
         print(f"sample: {trt_input_dict['sample'].shape}, {normal_pipeline}")
         with torch.no_grad():
             if normal_pipeline:
-                noise_pred = self.pipe.unet(**trt_input_dict)['latent']
-            else:
                 noise_pred = self.pipe_normal.unet(**trt_input_dict)['latent']
+            else:
+                noise_pred = self.pipe.unet(**trt_input_dict)['latent']
 
         noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
         

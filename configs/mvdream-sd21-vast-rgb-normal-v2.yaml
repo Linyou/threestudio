@@ -84,7 +84,7 @@ system:
   prompt_processor:
     pretrained_model_name_or_path: /mnt/pfs/share/pretrained_model/.cache/huggingface/hub/models--stabilityai--stable-diffusion-2-1-base/snapshots/5ede9e4bf3e3fd1cb0ef2f7a3fff13ee514fdf06
     prompt: ???
-    negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
+    negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, high lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
     # prompt_front: ${system.prompt_processor.prompt}
     # prompt_side: ${system.prompt_processor.prompt}
     # prompt_back: ${system.prompt_processor.prompt}
@@ -144,7 +144,8 @@ trainer:
   max_steps: 5000
   log_every_n_steps: ${trainer.max_steps}
   num_sanity_val_steps: 0
-  val_check_interval: ${trainer.max_steps}
+  val_check_interval: 500
+  # val_check_interval: ${trainer.max_steps}
   enable_progress_bar: true
   precision: 16-mixed
 

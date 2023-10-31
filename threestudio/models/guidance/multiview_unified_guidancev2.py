@@ -116,6 +116,7 @@ class MultiViewUnifiedGuidance(BaseModule):
         # vsd_camera_condition_type: Optional[str] = "extrinsics"
         rgb_loss_scale: float = 1.0
         normal_loss_scale: float = 1.0
+        rgb_pipeline_start_step: int = 10000
 
     cfg: Config
 
@@ -390,54 +391,63 @@ class MultiViewUnifiedGuidance(BaseModule):
                 "(b nv) three four -> b nv (three four)",
                 nv=self.cfg.n_multi_views,
             )
-        with torch.no_grad():
-            if pred_rgb and pred_normal:
-                class_labels = torch.tensor([0,1]).cuda()
-                latents_multiview_noisy = torch.cat([latents_multiview_noisy, latents_multiview_noisy_normal], dim=2)
-            elif pred_normal:
-                class_labels = torch.tensor([1]).cuda()
-                latents_multiview_noisy = latents_multiview_noisy_normal
-            else:
-                class_labels = torch.tensor([0]).cuda()
+        if rgb_pipeline:
             trt_input_dict = {
                 "sample": torch.cat([latents_multiview_noisy] * 2, dim=0),
                 "timestep": torch.cat([t] * 2, dim=0),
                 "encoder_hidden_states": text_embeddings,
                 "camera": torch.cat([camera_matrixs] * 2, dim=0),
-                "class_labels": class_labels
             }
-            print(f"sample: {trt_input_dict['sample'].shape}")
-            t1 = time.time()
-            noise_pred = self.pipe.unet(**trt_input_dict)['latent']
-            torch.cuda.synchronize()
-            t2 = time.time()
-            print(f"unet time: {t2-t1}")
-            # noise_pred = self.forward_unet(
-            #     self.pipe.unet,
-            #     torch.cat([latents_multiview_noisy] * 2, dim=0),
-            #     torch.cat([t] * 2, dim=0),
-            #     encoder_hidden_states=text_embeddings,
-            #     camera_matrixs=camera_matrixs,
-            #     velocity_to_epsilon=self.pipe.scheduler.config.prediction_type
-            #     == "v_prediction",
-            # )
+            with torch.no_grad():
+                noise_pred = self.pipe.unet(**trt_input_dict)['latent']
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
+                noise_pred_text - noise_pred_uncond
+            )
+                
+            noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
 
-        noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-        noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
-            noise_pred_text - noise_pred_uncond
-        )
-        if pred_rgb and pred_normal:
-            noise_pred, noise_pred_normal = noise_pred.chunk(2, dim=2)
-            noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
-            noise_pred_normal = rearrange(noise_pred_normal, "b c nv h w -> (b nv) c h w")
-        elif pred_rgb:
-            noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
-            noise_pred_normal = None
-        elif pred_normal:
-            noise_pred_normal = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
-            noise_pred = None
-        # noise_pred = torch.cat([noise_pred,noise_pred_normal],dim=0)
-        return noise_pred, noise_pred_normal
+            return noise_pred, 0
+        else:
+            with torch.no_grad():
+                if pred_rgb and pred_normal:
+                    class_labels = torch.tensor([0,1]).cuda()
+                    latents_multiview_noisy = torch.cat([latents_multiview_noisy, latents_multiview_noisy_normal], dim=2)
+                elif pred_normal:
+                    class_labels = torch.tensor([1]).cuda()
+                    latents_multiview_noisy = latents_multiview_noisy_normal
+                else:
+                    class_labels = torch.tensor([0]).cuda()
+                trt_input_dict = {
+                    "sample": torch.cat([latents_multiview_noisy] * 2, dim=0),
+                    "timestep": torch.cat([t] * 2, dim=0),
+                    "encoder_hidden_states": text_embeddings,
+                    "camera": torch.cat([camera_matrixs] * 2, dim=0),
+                    "class_labels": class_labels
+                }
+                print(f"sample: {trt_input_dict['sample'].shape}")
+                t1 = time.time()
+                noise_pred = self.pipe.unet(**trt_input_dict)['latent']
+                torch.cuda.synchronize()
+                t2 = time.time()
+                print(f"unet time: {t2-t1}")
+
+            noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
+                noise_pred_text - noise_pred_uncond
+            )
+            if pred_rgb and pred_normal:
+                noise_pred, noise_pred_normal = noise_pred.chunk(2, dim=2)
+                noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
+                noise_pred_normal = rearrange(noise_pred_normal, "b c nv h w -> (b nv) c h w")
+            elif pred_rgb:
+                noise_pred = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
+                noise_pred_normal = None
+            elif pred_normal:
+                noise_pred_normal = rearrange(noise_pred, "b c nv h w -> (b nv) c h w")
+                noise_pred = None
+            # noise_pred = torch.cat([noise_pred,noise_pred_normal],dim=0)
+            return noise_pred, noise_pred_normal
 
     def get_eps_phi(
         self,
@@ -558,10 +568,16 @@ class MultiViewUnifiedGuidance(BaseModule):
         step = 0,
         **kwargs,
     ):  
+        rgb_pipeline = False
         print(f"step: {step}")
-        # TODO: hard code
-        if step==3002:
+        if step>self.cfg.rgb_pipeline_start_step:
             self.pipe.unet = self.unet_256
+            rgb_pipeline = True
+            self.cfg.normal_loss = 0
+            self.cfg.rgb_loss = 1
+            self.cfg.normal_loss_scale = 0
+            self.cfg.rgb_loss_scale = 1
+            
         pred_rgb = True
         pred_normal = True
         if rgb is None:
@@ -599,7 +615,10 @@ class MultiViewUnifiedGuidance(BaseModule):
             # latents = self.vae_encode(self.pipe.vae, rgb_BCHW * 2.0 - 1.0)
             # latents_normal = self.vae_encode(self.pipe.vae, normal_BCHW * 2.0 - 1.0)
             latents = self.encode_images(rgb_BCHW)
-            latents_normal = self.encode_images(normal_BCHW)
+            if rgb_pipeline:
+                latents_normal = latents
+            else:
+                latents_normal = self.encode_images(normal_BCHW)
             # alpha = 0.5
             # latents_normal = latents_normal * alpha + latents * (1-alpha)
             # latents = torch.cat([latents, latents_normal], dim = 0)
@@ -631,6 +650,7 @@ class MultiViewUnifiedGuidance(BaseModule):
             c2w,
             pred_rgb,
             pred_normal,
+            rgb_pipeline,
         )
         if pred_rgb:
             latents_1step_orig = (

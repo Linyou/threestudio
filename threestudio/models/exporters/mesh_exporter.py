@@ -12,7 +12,50 @@ from threestudio.models.materials.base import BaseMaterial
 from threestudio.models.mesh import Mesh
 from threestudio.utils.rasterize import NVDiffRasterizerContext
 from threestudio.utils.typing import *
+from threestudio.utils.saving import SaverMixin
+import pymeshlab
+import trimesh
 
+import time
+def timing_decorator(func):
+    def wrapper(*args, **kwargs):
+        torch.cuda.synchronize()
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        torch.cuda.synchronize()
+        end_time = time.time()
+        elapsed_time = (end_time - start_time) * 1000
+        print(f"Function {func.__name__} took {elapsed_time:.4f} microsecond to execute.")
+        return result
+    return wrapper
+
+def reduce_face(obj_path, out_path):
+    ms = pymeshlab.MeshSet()
+    ms.load_new_mesh(obj_path)
+    current_face_num = ms.current_mesh().face_number()
+    
+    targetperc = min(50000 / current_face_num, 1)
+    
+    ms.meshing_decimation_quadric_edge_collapse(
+        targetperc=targetperc,
+        preserveboundary=True,
+        preservenormal=True,
+        preservetopology=True,
+        optimalplacement=True,
+        planarquadric=False,
+        autoclean=True,
+    )
+    ms.save_current_mesh(out_path, save_vertex_normal=False)
+    print(f"before_face_num: {current_face_num}, after: {ms.current_mesh().face_number()}")
+
+    ms.clear()
+
+def load_mesh_from_obj(obj_file_path: str) -> Mesh:
+    trimesh_mesh = trimesh.load(obj_file_path, force="mesh", process=False)
+    v_pos = torch.from_numpy(trimesh_mesh.vertices).cuda().float() #TODO: hard code for device
+    t_pos_idx = torch.from_numpy(trimesh_mesh.faces).cuda() #TODO: hard code for device
+
+    return Mesh(v_pos, t_pos_idx)
 
 @threestudio.register("mesh-exporter")
 class MeshExporter(Exporter):
@@ -42,6 +85,14 @@ class MeshExporter(Exporter):
 
     def __call__(self) -> List[ExporterOutput]:
         mesh: Mesh = self.geometry.isosurface()
+
+        # reduce faces
+        save_helper = SaverMixin()
+        save_helper.set_save_dir("tmp")
+        save_helper.save_obj(filename="model", mesh=mesh)
+        reduce_face("tmp/model.obj", "tmp/model.obj")
+        # load new mesh
+        mesh = load_mesh_from_obj("tmp/model.obj")
 
         if self.cfg.fmt == "obj-mtl":
             return self.export_obj_with_mtl(mesh)
@@ -91,17 +142,27 @@ class MeshExporter(Exporter):
             hole_mask = ~(rast[:, :, 3] > 0)
 
             def uv_padding(image):
+                h, w = image.shape[:2]
+                new_h = int(h / 2)
+                new_w = int(w / 2)
                 uv_padding_size = self.cfg.xatlas_pack_options.get("padding", 2)
+                image_tmp = image.detach().cpu().numpy() * 255
+                hole_mask_tmp = hole_mask.detach().cpu().numpy() * 255
+                image_resize = cv2.resize(image_tmp.astype(np.uint8), (new_h, new_w))
+                hole_mask_resize = cv2.resize(hole_mask_tmp.astype(np.uint8), (new_h, new_w))
                 inpaint_image = (
                     cv2.inpaint(
-                        (image.detach().cpu().numpy() * 255).astype(np.uint8),
-                        (hole_mask.detach().cpu().numpy() * 255).astype(np.uint8),
+                        image_resize.astype(np.uint8),
+                        hole_mask_resize.astype(np.uint8),
                         uv_padding_size,
                         cv2.INPAINT_TELEA,
                     )
-                    / 255.0
+                    # / 255.0
                 )
-                return torch.from_numpy(inpaint_image).to(image)
+                inpaint_image = cv2.resize(inpaint_image, (h, w))
+                result_image = np.copy(image_tmp)
+                result_image[hole_mask_tmp != 0] = inpaint_image[hole_mask_tmp != 0]
+                return torch.from_numpy(result_image / 255.0).to(image)
 
             # Interpolate world space position
             gb_pos, _ = self.ctx.interpolate_one(

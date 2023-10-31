@@ -8,6 +8,18 @@ import threestudio
 from threestudio.utils.ops import dot
 from threestudio.utils.typing import *
 
+import time
+def timing_decorator(func):
+    def wrapper(*args, **kwargs):
+        torch.cuda.synchronize()
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        torch.cuda.synchronize()
+        end_time = time.time()
+        elapsed_time = (end_time - start_time) * 1000
+        print(f"Function {func.__name__} took {elapsed_time:.4f} microsecond to execute.")
+        return result
+    return wrapper
 
 class Mesh:
     def __init__(
@@ -204,6 +216,7 @@ class Mesh:
 
         return tangents
 
+    @timing_decorator
     def _unwrap_uv(
         self, xatlas_chart_options: dict = {}, xatlas_pack_options: dict = {}
     ):

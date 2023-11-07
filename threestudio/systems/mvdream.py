@@ -11,7 +11,7 @@ from threestudio.utils.typing import *
 
 
 @threestudio.register("mvdream-system")
-class MVDreamSystem(BaseLift3DSystem):
+class MVDream(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
         visualize_samples: bool = False

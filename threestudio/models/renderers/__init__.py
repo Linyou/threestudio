@@ -7,5 +7,6 @@ from . import (
     neus_volume_renderer,
     nvdiff_rasterizer,
     nvdiff_rasterizer_gbg,
+    nvdiff_rasterizer_pbr,
     patch_renderer,
 )

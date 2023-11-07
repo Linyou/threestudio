@@ -13,6 +13,7 @@ from threestudio.utils.base import BaseObject
 from threestudio.utils.misc import C, cleanup, parse_version
 from threestudio.utils.ops import perpendicular_component
 from threestudio.utils.typing import *
+from threestudio.models.trt_model import TensorRTModel
 
 
 @threestudio.register("stable-diffusion-guidance")
@@ -46,6 +47,9 @@ class StableDiffusionGuidance(BaseObject):
 
         """Maximum number of batch items to evaluate guidance for (for debugging) and to save on disk. -1 means save all items."""
         max_items_eval: int = 4
+        
+        unsharp_mask: bool = False
+        unsharp_mix_factor: float = 0.1
 
     cfg: Config
 
@@ -67,7 +71,11 @@ class StableDiffusionGuidance(BaseObject):
             self.cfg.pretrained_model_name_or_path,
             **pipe_kwargs,
         ).to(self.device)
-
+        
+        engine_path = '/mnt/pfs/users/shenmingzhu/vastcode/submit/FastDiffusion/engines/stable-diffusion-v2-1-base/engine_mt/unet.plan'
+        batch = 2
+        unet = TensorRTModel(trt_engine_path=engine_path, shape_list=[(batch, 4, 64, 64), (batch,), (batch, 77, 1024), (batch, 4, 64, 64)])
+        self.pipe.unet = unet
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
                 threestudio.info(
@@ -94,12 +102,12 @@ class StableDiffusionGuidance(BaseObject):
 
         # Create model
         self.vae = self.pipe.vae.eval()
-        self.unet = self.pipe.unet.eval()
+        self.unet = self.pipe.unet
 
         for p in self.vae.parameters():
             p.requires_grad_(False)
-        for p in self.unet.parameters():
-            p.requires_grad_(False)
+        # for p in self.unet.parameters():
+        #     p.requires_grad_(False)
 
         if self.cfg.token_merging:
             import tomesd
@@ -150,11 +158,14 @@ class StableDiffusionGuidance(BaseObject):
         encoder_hidden_states: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
         input_dtype = latents.dtype
+        trt_input_dict = {
+            "sample": latents.to(self.weights_dtype),
+            "timestep": t.to(self.weights_dtype),
+            "encoder_hidden_states": encoder_hidden_states.to(self.weights_dtype),
+        }
         return self.unet(
-            latents.to(self.weights_dtype),
-            t.to(self.weights_dtype),
-            encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
-        ).sample.to(input_dtype)
+            **trt_input_dict
+        )['latent']
 
     @torch.cuda.amp.autocast(enabled=False)
     def encode_images(
@@ -246,6 +257,11 @@ class StableDiffusionGuidance(BaseObject):
 
             # perform guidance (high scale from paper!)
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+
+            # USE Unsharp
+            if self.cfg.unsharp_mask:
+                noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)                 
+
             noise_pred = noise_pred_text + self.cfg.guidance_scale * (
                 noise_pred_text - noise_pred_uncond
             )
@@ -349,6 +365,11 @@ class StableDiffusionGuidance(BaseObject):
 
                 # perform guidance (high scale from paper!)
                 noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+
+                # USE Unsharp
+                if self.cfg.unsharp_mask:
+                    noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)                     
+
                 noise_pred = noise_pred_text + self.cfg.guidance_scale * (
                     noise_pred_text - noise_pred_uncond
                 )
@@ -494,6 +515,11 @@ class StableDiffusionGuidance(BaseObject):
             )
             # perform guidance (high scale from paper!)
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+            
+            # USE Unsharp
+            if self.cfg.unsharp_mask:
+                noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)     
+            
             noise_pred = noise_pred_text + self.cfg.guidance_scale * (
                 noise_pred_text - noise_pred_uncond
             )
@@ -589,3 +615,26 @@ class StableDiffusionGuidance(BaseObject):
             min_step_percent=C(self.cfg.min_step_percent, epoch, global_step),
             max_step_percent=C(self.cfg.max_step_percent, epoch, global_step),
         )
+        
+        self.unsharp_mix_factor = C(self.cfg.unsharp_mix_factor, epoch, global_step)
+        
+    def apply_unsharp_mask(self, pred_noise, t, cfg_scale=100, kernel_size=3):
+        denoising_sigma = self.t_to_sigma(t)
+        cond_scale_factor = min(0.02 * cfg_scale, 0.65)
+        usm_sigma = torch.clamp(
+            1 + denoising_sigma * cond_scale_factor,
+            min=1e-6)
+        
+        sharpened = KR.filters.unsharp_mask(
+            pred_noise,
+            (kernel_size, kernel_size),
+            (usm_sigma, usm_sigma),
+            border_type='reflect'
+        )
+        pred_noise = pred_noise + (sharpened - pred_noise) * self.unsharp_mix_factor
+        
+        return pred_noise
+    
+    def t_to_sigma(self, t):
+        t = t/float(self.max_step + 1)
+        return (t * math.pi / 2).tan()

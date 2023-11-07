@@ -14,5 +14,6 @@ from . import (
     zero123_simple,
     mvdream_vast,
     unidream,
-    mvdream
+    mvdream,
+    brdfgen,
 )

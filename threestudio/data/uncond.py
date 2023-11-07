@@ -54,6 +54,8 @@ class RandomCameraDataModuleConfig:
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
     geometry_type: str = "unknown"
+    
+    offset_azimuth: int = 0
 
 class RandomCameraIterableDataset(IterableDataset, Updateable):
     def __init__(self, cfg: Any) -> None:
@@ -184,8 +186,8 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
                 * (self.azimuth_range[1] - self.azimuth_range[0])
                 + self.azimuth_range[0]
             )
+        azimuth_deg -= self.cfg.offset_azimuth
         azimuth = azimuth_deg * math.pi / 180
-
         # sample distances from a uniform distribution bounded by distance_range
         camera_distances: Float[Tensor, "B"] = (
             torch.rand(self.batch_size)
@@ -359,6 +361,7 @@ class RandomCameraDataset(Dataset):
         )
 
         elevation = elevation_deg * math.pi / 180
+        azimuth_deg -= self.cfg.offset_azimuth
         azimuth = azimuth_deg * math.pi / 180
 
         # convert spherical coordinates to cartesian coordinates

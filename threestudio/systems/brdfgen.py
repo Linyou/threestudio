@@ -18,6 +18,7 @@ from einops import rearrange
 import cv2
 
 import os
+import random
 from dataclasses import dataclass, field
 
 import pytorch_lightning as pl
@@ -76,6 +77,9 @@ class BRDFGen(BaseLift3DSystem):
         init_rm_with_value: bool = False
         
         reuse_prev_geometry: bool = False
+        
+        clip_prop: float = 1
+        guidance_alter: bool = False
         
     cfg: Config
 
@@ -283,47 +287,61 @@ class BRDFGen(BaseLift3DSystem):
                     self.cfg.loss.lambda_laplacian_smoothness
                 )
 
-        if isinstance(
-            self.guidance,
-            threestudio.models.guidance.controlnet_guidance.ControlNetGuidance,
-        ):
-            guidance_out = self.guidance(
-                guidance_inp, cond_inp, prompt_utils, **batch, rgb_as_latents=False
-            )
-        elif isinstance(
-            self.guidance,
-            threestudio.models.guidance.stable_diffusion_guidance.StableDiffusionGuidance,
-        ):
-            guidance_out = self.guidance(
-                guidance_inp, 
-                prompt_utils,  
-                **batch, 
-                rgb_as_latents=self.cfg.rgb_as_latents,
-                guidance_eval=guidance_eval,
-            )
-            if guidance_eval:
-                self.guidance_evaluation_save(
-                    out["comp_color"].detach()[: guidance_out["eval"]["bs"]],
-                    guidance_out["eval"]
+        if self.cfg.guidance_alter:
+            run_main_guidance = self.true_global_step % 2 == 0
+            run_dual_guidance = self.true_global_step % 2 == 1
+        else:
+            run_main_guidance = True
+            run_dual_guidance = True
+
+        # main guidance
+        if run_main_guidance:
+            if isinstance(
+                self.guidance,
+                threestudio.models.guidance.controlnet_guidance.ControlNetGuidance,
+            ):
+                guidance_out = self.guidance(
+                    guidance_inp, cond_inp, prompt_utils, **batch, rgb_as_latents=False
                 )
-                guidance_out.pop("eval")
-        elif isinstance(
-            self.guidance,
-            threestudio.models.guidance.brdf_guidance.BRDFGenGuidance
-        ):
-            guidance_out = self.guidance(
-                out["comp_color"], 
-                out["comp_albedo"],
-                out["comp_roughness"],
-                out["comp_specular_metallic"],
-                out["comp_normal"],
-                prompt_utils,  
-                **batch, 
-            )
+            elif isinstance(
+                self.guidance,
+                threestudio.models.guidance.stable_diffusion_guidance.StableDiffusionGuidance,
+            ):
+                guidance_out = self.guidance(
+                    guidance_inp, 
+                    prompt_utils,  
+                    **batch, 
+                    rgb_as_latents=self.cfg.rgb_as_latents,
+                    guidance_eval=guidance_eval,
+                )
+                if guidance_eval:
+                    self.guidance_evaluation_save(
+                        out["comp_color"].detach()[: guidance_out["eval"]["bs"]],
+                        guidance_out["eval"]
+                    )
+                    guidance_out.pop("eval")
+            elif isinstance(
+                self.guidance,
+                threestudio.models.guidance.brdf_guidance.BRDFGenGuidance
+            ):
+                guidance_out = self.guidance(
+                    out["comp_color"], 
+                    out["comp_albedo"],
+                    out["comp_roughness"],
+                    out["comp_specular_metallic"],
+                    out["comp_normal"],
+                    prompt_utils,  
+                    **batch, 
+                )
+                
+            for name, value in guidance_out.items():
+                self.log(f"train/{name}", value)
+                if name.startswith("loss_"):
+                    loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
             
 
-                
-        if self.cfg.guidance_type_II != "":
+        # dual guidance
+        if self.cfg.guidance_type_II != "" and run_dual_guidance:
             prompt_utils_II = self.prompt_utils_II
             # prompt_utils_II = self.prompt_utils
             guidance_out_II = self.guidance_II(
@@ -340,6 +358,11 @@ class BRDFGen(BaseLift3DSystem):
                     name='train_II'
                 )
                 guidance_out_II.pop("eval")
+                
+            for name, value in guidance_out_II.items():
+                self.log(f"train/{name}_II", value)
+                if name.startswith("loss_"):
+                    loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")+"_II"])
             
         if self.cfg.use_guidance_base:
             guidance_base_inp = out["comp_albedo"]
@@ -350,18 +373,6 @@ class BRDFGen(BaseLift3DSystem):
                 self.log(f"train/base_{name}", value)
                 if name.startswith("loss_"):
                     loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
-
-
-        for name, value in guidance_out.items():
-            self.log(f"train/{name}", value)
-            if name.startswith("loss_"):
-                loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
-                
-        if self.cfg.guidance_type_II != "":
-            for name, value in guidance_out_II.items():
-                self.log(f"train/{name}_II", value)
-                if name.startswith("loss_"):
-                    loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")+"_II"])
             
                 
         if self.cfg.use_albedo_brighness_loss:
@@ -401,9 +412,10 @@ class BRDFGen(BaseLift3DSystem):
                 o = out['raw_metallic']
                 loss += self.C(self.cfg.loss['lambda_metallic_loss']) * (-o*torch.log(o)).mean()
             
-        if 'lambda_roughness_loss' in self.cfg.loss:
+        if 'lambda_clipimage_loss' in self.cfg.loss:
             if self.C(self.cfg.loss['lambda_clipimage_loss']) > 0:
-                loss += self.clip_image_loss(batch, out["comp_color"])
+                if random.random()<self.cfg.clip_prop:
+                    loss += self.clip_image_loss(batch, out["comp_color"])
 
         return {"loss": loss}
 

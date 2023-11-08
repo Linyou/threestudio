@@ -112,7 +112,7 @@ system:
     switch_lights_interval: 1
     light_rotation: false
     use_visiblity: false
-    use_auto_gamma: false
+    use_auto_gamma: true
     single_channel_light: true
     fix_gamma: true
 
@@ -178,15 +178,15 @@ system:
   #   min_step_percent: 0.02
   #   max_step_percent: 0.98
     
-  guidance_type_II: "stable-diffusion-guidance"
-  guidance_II:
-    unsharp_mask: false
-    unsharp_mix_factor: 0.1
-    pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
-    weighting_strategy: sds
-    guidance_scale: 100.0
-    min_step_percent: 0.02
-    max_step_percent: 0.5
+  # guidance_type_II: "stable-diffusion-guidance"
+  # guidance_II:
+  #   unsharp_mask: false
+  #   unsharp_mix_factor: 0.1
+  #   pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
+  #   weighting_strategy: sds
+  #   guidance_scale: 100.0
+  #   min_step_percent: 0.02
+  #   max_step_percent: 0.5
     # view_dependent_prompting: false
 
   loggers:
@@ -199,18 +199,18 @@ system:
     # lambda_sds: [100, 0.1, 1., 5000]
     lambda_sds: 1.0
     # lambda_sds_II: 1.0
-    lambda_sds_II: 1.
+    lambda_sds_II: 0.
     lambda_normal_consistency: 0.
     lambda_laplacian_smoothness: 0.
     lambda_light_regularizer_white: 0.
     lambda_light_regularizer_tv: 0.
     lambda_metallic_loss: 0.
-    lambda_kd_loss: [100, 1000., 100., 2000]
-    # lambda_kd_loss: 100.
+    # lambda_kd_loss: [100, 1000., 100., 2000]
+    lambda_kd_loss: 0.
     # lambda_kr_loss: [100, 10., 100., 5000]
-    lambda_km_loss: [100, 10., 100., 2000]
-    lambda_kr_loss: 1.
-    # lambda_km_loss: 1000.
+    # lambda_km_loss: [100, 10., 100., 2000]
+    lambda_kr_loss: 100.
+    lambda_km_loss: 100.
     lambda_clipimage_loss: 1000.
 
   optimizer:
@@ -222,18 +222,18 @@ system:
     params:
       background:
         lr: 0.001
-      background_II:
-        lr: 0.001
+      # background_II:
+      #   lr: 0.001
       # material.auto_gamma:
       #   lr: 0.001   
       material.light:
         lr: 0.01   
-      geometry.encoding:
-        lr: 0.001
-      geometry.feature_network:
-        lr: 0.01
+      # geometry.encoding:
+      #   lr: 0.001
+      # geometry.feature_network:
+      #   lr: 0.01
       geometry.encoding_pbr:
-        lr: 0.001
+        lr: 0.0001
       geometry.feature_network_pbr:
         lr: 0.01
       # geometry.feature_network_v:
@@ -250,7 +250,7 @@ system:
       #   lr: 0.001
 
 trainer:
-  max_steps: 2000
+  max_steps: 10000
   log_every_n_steps: 1
   num_sanity_val_steps: 1
   val_check_interval: 200

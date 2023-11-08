@@ -385,10 +385,9 @@ class PBRMaterial(BaseMaterial):
         return results_dict
     
     def light_regularizer_tv(self):
-        term1 = (self.light.base[..., 0:1] - self.light.base[..., 1:2]).pow(2)
-        term2 = (self.light.base[..., 0:1] - self.light.base[..., 2:3]).pow(2)
-        term3 = (self.light.base[..., 1:2] - self.light.base[..., 2:3]).pow(2)
-        return torch.mean(term1+term2+term3)
+        term1 = torch.pow(self.light.base[:,1:,:,:]-self.light.base[:,:-1,:,:], 2).sum()
+        term2 = torch.pow(self.light.base[:,:,1:,:]-self.light.base[:,:,:-1,:], 2).sum()
+        return (term1+term2)/self.light.max_res
     
     def light_regularizer_white(self):
         white = (self.light.base[..., 0:1] + self.light.base[..., 1:2] + self.light.base[..., 2:3]) / 3

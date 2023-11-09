@@ -61,7 +61,6 @@ class BRDFGen(BaseLift3DSystem):
         use_ks_smooth_loss: bool = False
         use_albedo_bg: bool = False
         
-        positions_jitter: bool = False
         detach_albedo: bool = False
         
         guidance_type_II: str = ""
@@ -75,11 +74,15 @@ class BRDFGen(BaseLift3DSystem):
         
         render_visiblity: bool = True
         init_rm_with_value: bool = False
+        init_r_value: float = 0.6
+        init_m_value: float = 0.2
         
         reuse_prev_geometry: bool = False
         
         clip_prop: float = 1
         guidance_alter: bool = False
+        
+        guidance_eval: bool = True
         
     cfg: Config
 
@@ -233,7 +236,7 @@ class BRDFGen(BaseLift3DSystem):
             render_rgb=self.cfg.texture, 
             step=self.true_global_step, 
             render_depth=False,
-            positions_jitter=self.cfg.positions_jitter,
+            positions_jitter=self.cfg.use_ks_smooth_loss,
             detach_albedo=self.cfg.detach_albedo,
             **render_kwargs,
         )
@@ -244,11 +247,6 @@ class BRDFGen(BaseLift3DSystem):
 
     def on_fit_start(self) -> None:
         super().on_fit_start()
-        self.logger.experiment.add_text(
-            "Config", 
-            pretty_json(OmegaConf.to_container(self.cfg)), 
-            global_step=0
-        )
         if not self.cfg.texture:
             # initialize SDF
             # FIXME: what if using other geometry types?
@@ -256,19 +254,19 @@ class BRDFGen(BaseLift3DSystem):
 
     def training_step(self, batch, batch_idx):
         loss = 0.0
-    
-        guidance_eval = self.true_global_step == 0
 
         out = self(batch)
         prompt_utils = self.prompt_utils
+        
+        guidance_eval = self.true_global_step == 0 if not self.cfg.init_rm_with_value else self.true_global_step == 100
 
         guidance_inp = out["comp_color"]
         cond_inp = out["comp_normal"]
         
         if self.true_global_step < 100 and self.cfg.init_rm_with_value:
             
-            loss = F.mse_loss(out["raw_roughness"], torch.zeros_like(out["raw_roughness"]) + 0.6)
-            loss += F.mse_loss(out["raw_metallic"], torch.zeros_like(out["raw_metallic"]) + 0.2)
+            loss = F.mse_loss(out["raw_roughness"], torch.zeros_like(out["raw_roughness"]) + self.cfg.init_r_value)
+            loss += F.mse_loss(out["raw_metallic"], torch.zeros_like(out["raw_metallic"]) + self.cfg.init_m_value)
             
             return {"loss": loss}
         
@@ -322,6 +320,19 @@ class BRDFGen(BaseLift3DSystem):
                     guidance_out.pop("eval")
             elif isinstance(
                 self.guidance,
+                threestudio.models.guidance.stable_diffusion_unified_guidance_trt.StableDiffusionUnifiedGuidanceTRT,
+            ):
+                controlnet_conditions = {
+                    "rgb": out['comp_color']
+                }
+                if "comp_normal" in out:
+                    controlnet_conditions["normal"] = out["comp_normal"]
+                guidance_out = self.guidance(
+                    out["comp_color"], prompt_utils, **batch, rgb_as_latents=False,
+                    controlnet_conditions=controlnet_conditions
+                )
+            elif isinstance(
+                self.guidance,
                 threestudio.models.guidance.brdf_guidance.BRDFGenGuidance
             ):
                 guidance_out = self.guidance(
@@ -335,7 +346,7 @@ class BRDFGen(BaseLift3DSystem):
                 )
                 
             for name, value in guidance_out.items():
-                self.log(f"train/{name}", value)
+                # self.log(f"train/{name}", value)
                 if name.startswith("loss_"):
                     loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
             
@@ -646,4 +657,64 @@ class BRDFGen(BaseLift3DSystem):
             name="test",
             step=self.true_global_step,
             log_to_logger=True,
+        )
+        
+    def guidance_evaluation_save(self, comp_rgb, guidance_eval_out, name='train'):
+        B, size = comp_rgb.shape[:2]
+        resize = lambda x: F.interpolate(
+            x.permute(0, 3, 1, 2), (size, size), mode="bilinear", align_corners=False
+        ).permute(0, 2, 3, 1)
+        filename = f"it{self.true_global_step}-{name}.png"
+
+        def merge12(x):
+            return x.reshape(-1, *x.shape[2:])
+
+        self.save_image_grid(
+            filename,
+            [
+                {
+                    "type": "rgb",
+                    "img": merge12(comp_rgb),
+                    "kwargs": {"data_format": "HWC"},
+                },
+            ]
+            + (
+                [
+                    {
+                        "type": "rgb",
+                        "img": merge12(resize(guidance_eval_out["imgs_noisy"])),
+                        "kwargs": {"data_format": "HWC"},
+                    }
+                ]
+            )
+            + (
+                [
+                    {
+                        "type": "rgb",
+                        "img": merge12(resize(guidance_eval_out["imgs_1step"])),
+                        "kwargs": {"data_format": "HWC"},
+                    }
+                ]
+            )
+            + (
+                [
+                    {
+                        "type": "rgb",
+                        "img": merge12(resize(guidance_eval_out["imgs_1orig"])),
+                        "kwargs": {"data_format": "HWC"},
+                    }
+                ]
+            )
+            + (
+                [
+                    {
+                        "type": "rgb",
+                        "img": merge12(resize(guidance_eval_out["imgs_final"])),
+                        "kwargs": {"data_format": "HWC"},
+                    }
+                ]
+            ),
+            name="train_step",
+            step=self.true_global_step,
+            texts=guidance_eval_out["texts"],
         )

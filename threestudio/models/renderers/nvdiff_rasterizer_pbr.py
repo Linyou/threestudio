@@ -67,8 +67,8 @@ class NVDiffRasterizerPBR(Rasterizer):
         if self.training:
             sel_rgb_bg = gb_rgb_bg
         else:
-            sel_rgb_bg = torch.zeros_like(gb_rgb_bg) + 0.5
-            sel_rgb_bg = torch.tensor([233, 239, 248], dtype=torch.float32).to(sel_rgb_bg) / 255.0
+            # sel_rgb_bg = torch.zeros_like(gb_rgb_bg) + 0.5
+            sel_rgb_bg = torch.tensor([233, 239, 248], dtype=torch.float32).to(gb_rgb_bg) / 255.0
         
         
         gb_normal, _ = self.ctx.interpolate_one(mesh.v_nrm, rast, mesh.t_pos_idx)
@@ -124,7 +124,7 @@ class NVDiffRasterizerPBR(Rasterizer):
             
             if self.cfg.positions_jitter:
                 jitter = torch.normal(
-                    mean=0, std=0.05,
+                    mean=0, std=0.2,
                     size=positions.shape,
                     device=positions.device,
                 )

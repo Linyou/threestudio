@@ -54,6 +54,8 @@ class RandomCameraDataModuleConfig:
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
     geometry_type: str = "unknown"
+    
+    offset_azimuth: int = 0
 
 class RandomCameraIterableDataset(IterableDataset, Updateable):
     def __init__(self, cfg: Any) -> None:
@@ -184,8 +186,8 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
                 * (self.azimuth_range[1] - self.azimuth_range[0])
                 + self.azimuth_range[0]
             )
+        azimuth_deg -= self.cfg.offset_azimuth
         azimuth = azimuth_deg * math.pi / 180
-
         # sample distances from a uniform distribution bounded by distance_range
         camera_distances: Float[Tensor, "B"] = (
             torch.rand(self.batch_size)
@@ -311,8 +313,20 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             directions[:, :, :, :2] / focal_length[:, None, None, None]
         )
 
-        # Importance note: the returned rays_d MUST be normalized!
-        rays_o, rays_d = get_rays(directions, c2w, keepdim=True)
+        if self.cfg.geometry_type != "dmtet":
+            # get directions by dividing directions_unit_focal by focal length
+            focal_length: Float[Tensor, "B"] = 0.5 * self.height / torch.tan(0.5 * fovy)
+            directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[
+                None, :, :, :
+            ].repeat(self.batch_size, 1, 1, 1)
+            directions[:, :, :, :2] = (
+                directions[:, :, :, :2] / focal_length[:, None, None, None]
+            )
+
+            # Importance note: the returned rays_d MUST be normalized!
+            rays_o, rays_d = get_rays(directions, c2w, keepdim=True)
+        else:
+            rays_o, rays_d = None, None
 
         proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
             fovy, self.width / self.height, 0.1, 1000.0
@@ -359,6 +373,7 @@ class RandomCameraDataset(Dataset):
         )
 
         elevation = elevation_deg * math.pi / 180
+        azimuth_deg -= self.cfg.offset_azimuth
         azimuth = azimuth_deg * math.pi / 180
 
         # convert spherical coordinates to cartesian coordinates
@@ -397,7 +412,6 @@ class RandomCameraDataset(Dataset):
             [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
         )
         c2w[:, 3, 3] = 1.0
-
         # get directions by dividing directions_unit_focal by focal length
         focal_length: Float[Tensor, "B"] = (
             0.5 * self.cfg.eval_height / torch.tan(0.5 * fovy)
@@ -413,6 +427,7 @@ class RandomCameraDataset(Dataset):
         )
 
         rays_o, rays_d = get_rays(directions, c2w, keepdim=True)
+
         proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
             fovy, self.cfg.eval_width / self.cfg.eval_height, 0.1, 1000.0
         )  # FIXME: hard-coded near and far

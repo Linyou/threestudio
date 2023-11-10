@@ -9,5 +9,7 @@ from . import (
     zero123_unified_guidance,
     multiview_unified_guidance,
     multiview_unified_guidancev2,
-    multiview_diffusion_guidance
+    multiview_diffusion_guidance,
+    stable_diffusion_unified_guidance_trt,
+    stable_diffusion_guidance_trt,
 )

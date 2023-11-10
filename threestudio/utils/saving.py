@@ -306,6 +306,7 @@ class SaverMixin:
         name: Optional[str] = None,
         step: Optional[int] = None,
         texts: Optional[List[float]] = None,
+        log_to_logger: bool = False,
     ):
         save_path = self.get_save_path(filename)
         img = self.get_image_grid_(imgs, align=align)
@@ -325,8 +326,15 @@ class SaverMixin:
         cv2.imwrite(save_path, img)
         if name and self._wandb_logger:
             wandb.log({name: wandb.Image(save_path), "trainer/global_step": step})
+        # if log_to_logger:
+        #     self.logger.experiment.add_image(
+        #         name, 
+        #         np.transpose(img[..., ::-1],(2,0,1)), 
+        #         step,
+        #     )
+        
         return save_path
-
+    
     def save_image(self, filename, img) -> str:
         save_path = self.get_save_path(filename)
         img = self.convert_data(img)
@@ -401,6 +409,7 @@ class SaverMixin:
         fps=30,
         name: Optional[str] = None,
         step: Optional[int] = None,
+        log_to_logger: bool = False,
     ) -> str:
         assert save_format in ["gif", "mp4"]
         if not filename.endswith(save_format):
@@ -428,6 +437,14 @@ class SaverMixin:
                     "trainer/global_step": step,
                 }
             )
+        # if name and log_to_logger:
+        #     imgs = np.expand_dims(
+        #         np.stack([
+        #             np.transpose(im,(2,0,1)) for im in imgs
+        #         ]), 
+        #         axis=0
+        #     )
+        #     self.logger.experiment.add_video(name, imgs, step)
         return save_path
 
     def save_mesh(self, filename, v_pos, t_pos_idx, v_tex=None, t_tex_idx=None) -> str:

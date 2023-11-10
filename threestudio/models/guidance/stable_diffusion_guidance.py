@@ -14,6 +14,10 @@ from threestudio.utils.misc import C, cleanup, parse_version
 from threestudio.utils.ops import perpendicular_component
 from threestudio.utils.typing import *
 
+from einops import rearrange
+import kornia as KR
+import math
+
 
 @threestudio.register("stable-diffusion-guidance")
 class StableDiffusionGuidance(BaseObject):
@@ -46,6 +50,12 @@ class StableDiffusionGuidance(BaseObject):
 
         """Maximum number of batch items to evaluate guidance for (for debugging) and to save on disk. -1 means save all items."""
         max_items_eval: int = 4
+        
+        taesd: bool = False
+        grad_type: str = "delta"
+        
+        unsharp_mask: bool = False
+        unsharp_mix_factor: float = 0.1
 
     cfg: Config
 
@@ -66,7 +76,12 @@ class StableDiffusionGuidance(BaseObject):
         self.pipe = StableDiffusionPipeline.from_pretrained(
             self.cfg.pretrained_model_name_or_path,
             **pipe_kwargs,
-        ).to(self.device)
+        )
+        
+        # if self.cfg.taesd:
+        #     self.pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=torch.float16)
+        
+        self.pipe = self.pipe.to(self.device)
 
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
@@ -161,9 +176,13 @@ class StableDiffusionGuidance(BaseObject):
         self, imgs: Float[Tensor, "B 3 512 512"]
     ) -> Float[Tensor, "B 4 64 64"]:
         input_dtype = imgs.dtype
-        imgs = imgs * 2.0 - 1.0
-        posterior = self.vae.encode(imgs.to(self.weights_dtype)).latent_dist
-        latents = posterior.sample() * self.vae.config.scaling_factor
+        if self.cfg.taesd:
+            latents = self.vae.encode(imgs.to(self.weights_dtype)).latents
+            # latents = self.vae.scale_latents(posterior)
+        else:
+            imgs = imgs * 2.0 - 1.0
+            posterior = self.vae.encode(imgs.to(self.weights_dtype)).latent_dist
+            latents = posterior.sample() * self.vae.config.scaling_factor
         return latents.to(input_dtype)
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -177,7 +196,8 @@ class StableDiffusionGuidance(BaseObject):
         latents = F.interpolate(
             latents, (latent_height, latent_width), mode="bilinear", align_corners=False
         )
-        latents = 1 / self.vae.config.scaling_factor * latents
+        if not self.cfg.taesd:
+            latents = 1 / self.vae.config.scaling_factor * latents
         image = self.vae.decode(latents.to(self.weights_dtype)).sample
         image = (image * 0.5 + 0.5).clamp(0, 1)
         return image.to(input_dtype)
@@ -246,9 +266,15 @@ class StableDiffusionGuidance(BaseObject):
 
             # perform guidance (high scale from paper!)
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-            noise_pred = noise_pred_text + self.cfg.guidance_scale * (
+    
+            # USE Unsharp
+            if self.cfg.unsharp_mask:
+                noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)        
+    
+            guidance_delta = self.cfg.guidance_scale * (
                 noise_pred_text - noise_pred_uncond
             )
+            noise_pred = noise_pred_text + guidance_delta
 
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
@@ -262,7 +288,12 @@ class StableDiffusionGuidance(BaseObject):
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
             )
 
-        grad = w * (noise_pred - noise)
+        if self.cfg.grad_type == "sds":
+            grad = w * (noise_pred - noise)
+        elif self.cfg.grad_type == "delta":
+            grad = w * guidance_delta
+        else:
+            raise ValueError(f"Unknown grad type: {self.cfg.grad_type}")
 
         guidance_eval_utils = {
             "use_perp_neg": prompt_utils.use_perp_neg,
@@ -322,6 +353,7 @@ class StableDiffusionGuidance(BaseObject):
                     -1, 1, 1, 1
                 ) * perpendicular_component(e_i_neg, e_pos)
 
+
             noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
                 e_pos + accum_grad
             )
@@ -349,9 +381,15 @@ class StableDiffusionGuidance(BaseObject):
 
                 # perform guidance (high scale from paper!)
                 noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+                
+                # USE Unsharp
+                if self.cfg.unsharp_mask:
+                    noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)
+                
                 noise_pred = noise_pred_text + self.cfg.guidance_scale * (
                     noise_pred_text - noise_pred_uncond
                 )
+                
 
         Ds = zs - sigma * noise_pred
 
@@ -494,6 +532,11 @@ class StableDiffusionGuidance(BaseObject):
             )
             # perform guidance (high scale from paper!)
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
+
+            # USE Unsharp
+            if self.cfg.unsharp_mask:
+                noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)            
+
             noise_pred = noise_pred_text + self.cfg.guidance_scale * (
                 noise_pred_text - noise_pred_uncond
             )
@@ -589,3 +632,26 @@ class StableDiffusionGuidance(BaseObject):
             min_step_percent=C(self.cfg.min_step_percent, epoch, global_step),
             max_step_percent=C(self.cfg.max_step_percent, epoch, global_step),
         )
+        
+        self.unsharp_mix_factor = C(self.cfg.unsharp_mix_factor, epoch, global_step)
+        
+    def apply_unsharp_mask(self, pred_noise, t, cfg_scale=100, kernel_size=3):
+        denoising_sigma = self.t_to_sigma(t)
+        cond_scale_factor = min(0.02 * cfg_scale, 0.65)
+        usm_sigma = torch.clamp(
+            1 + denoising_sigma * cond_scale_factor,
+            min=1e-6)
+        
+        sharpened = KR.filters.unsharp_mask(
+            pred_noise,
+            (kernel_size, kernel_size),
+            (usm_sigma, usm_sigma),
+            border_type='reflect'
+        )
+        pred_noise = pred_noise + (sharpened - pred_noise) * self.unsharp_mix_factor
+        
+        return pred_noise
+    
+    def t_to_sigma(self, t):
+        t = t/float(self.max_step + 1)
+        return (t * math.pi / 2).tan()

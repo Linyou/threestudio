@@ -52,6 +52,28 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
                 "n_hidden_layers": 1,
             }
         )
+        
+        pbr_pos_encoding_config: dict = field(
+            default_factory=lambda: {
+                "otype": "HashGrid",
+                "n_levels": 16,
+                "n_features_per_level": 2,
+                "log2_hashmap_size": 19,
+                "base_resolution": 16,
+                "per_level_scale": 1.447269237440378,
+                # "per_level_scale": 1.096824979694626,
+            }
+        )
+        
+        pbr_mlp_network_config: dict = field(
+            default_factory=lambda: {
+                "otype": "VanillaMLP",
+                "activation": "ReLU",
+                "output_activation": "none",
+                "n_neurons": 64,
+                "n_hidden_layers": 1,
+            }
+        )
         shape_init: Optional[str] = None
         shape_init_params: Optional[Any] = None
         shape_init_mesh_up: str = "+z"
@@ -59,6 +81,9 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
         force_shape_init: bool = False
         geometry_only: bool = False
         fix_geometry: bool = False
+        
+        new_pbr_model: bool = False
+        use_new_pbr_encoder: bool = False
 
     cfg: Config
 
@@ -119,6 +144,17 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
             self.feature_network = get_mlp(
                 self.encoding.n_output_dims,
                 self.cfg.n_feature_dims,
+                self.cfg.mlp_network_config,
+            )
+            
+        if self.cfg.new_pbr_model:
+            if self.cfg.use_new_pbr_encoder:
+                self.encoding_pbr = get_encoding(
+                    self.cfg.n_input_dims, self.cfg.pbr_pos_encoding_config
+                )
+            self.feature_network_pbr = get_mlp(
+                self.encoding.n_output_dims,
+                6,
                 self.cfg.mlp_network_config,
             )
 
@@ -261,6 +297,16 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
         features = self.feature_network(enc).view(
             *points.shape[:-1], self.cfg.n_feature_dims
         )
+        if self.cfg.new_pbr_model:
+            if self.cfg.use_new_pbr_encoder:
+                enc_pbr = self.encoding_pbr(points.reshape(-1, self.cfg.n_input_dims))
+            else:
+                enc_pbr = enc
+                
+            features_pbr = self.feature_network_pbr(enc_pbr).view(
+                *points.shape[:-1], 6
+            )
+            features = torch.cat([features, features_pbr], dim=-1)
         return {"features": features}
 
     @staticmethod
@@ -293,6 +339,17 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
                 instance.feature_network.load_state_dict(
                     other.feature_network.state_dict()
                 )
+                
+                if instance.cfg.use_new_pbr_encoder and other.cfg.use_new_pbr_encoder:
+                    instance.encoding_pbr.load_state_dict(other.encoding.state_dict())
+                elif instance.cfg.use_new_pbr_encoder:
+                    instance.encoding_pbr.load_state_dict(other.encoding.state_dict())
+                    
+                if instance.cfg.new_pbr_model and other.cfg.new_pbr_model:
+                    instance.feature_network_pbr.load_state_dict(
+                        other.feature_network_pbr.state_dict()
+                    )
+                    
             return instance
         elif isinstance(other, ImplicitVolume):
             instance = TetrahedraSDFGrid(cfg, **kwargs)
@@ -316,6 +373,10 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
                 instance.feature_network.load_state_dict(
                     other.feature_network.state_dict()
                 )
+
+                if instance.cfg.use_new_pbr_encoder:
+                    instance.encoding_pbr.load_state_dict(other.encoding.state_dict())
+                    
             return instance
         elif isinstance(other, ImplicitSDF):
             instance = TetrahedraSDFGrid(cfg, **kwargs)
@@ -345,6 +406,9 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
                 instance.feature_network.load_state_dict(
                     other.feature_network.state_dict()
                 )
+                
+                if instance.cfg.use_new_pbr_encoder:
+                    instance.encoding_pbr.load_state_dict(other.encoding.state_dict())
             return instance
         else:
             raise TypeError(
@@ -361,6 +425,17 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
         features = self.feature_network(enc).view(
             *points.shape[:-1], self.cfg.n_feature_dims
         )
+        
+        if self.cfg.new_pbr_model:
+            if self.cfg.use_new_pbr_encoder:
+                enc_pbr = self.encoding_pbr(points.reshape(-1, self.cfg.n_input_dims))
+            else:
+                enc_pbr = enc
+            features_pbr = self.feature_network_pbr(enc_pbr).view(
+                *points.shape[:-1], 6
+            )
+            features = torch.cat([features, features_pbr], dim=-1)
+            
         out.update(
             {
                 "features": features,

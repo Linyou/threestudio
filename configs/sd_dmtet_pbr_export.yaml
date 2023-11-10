@@ -40,7 +40,7 @@ system:
   init_rm_with_value: true
   init_r_value: 0.5
   init_m_value: 0.2
-  guidance_alter: false
+  guidance_alter: true
   # clip_prop: 0.5
   # refinement: true
   # geometry_convert_from: ???
@@ -89,7 +89,7 @@ system:
     switch_lights_interval: 1
     light_rotation: false
     use_visiblity: false
-    use_auto_gamma: true
+    use_auto_gamma: false
     single_channel_light: false
     fix_gamma: true
 
@@ -129,7 +129,7 @@ system:
 
   guidance_type_II: "stable-diffusion-guidance-trt"
   guidance_II:
-    enable_tiny_vae: false
+    enable_tiny_vae: true
     unsharp_mask: false
     unsharp_mix_factor: 0.1
     pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
@@ -155,12 +155,12 @@ system:
     lambda_light_regularizer_white: 0.
     lambda_light_regularizer_tv: 0.
     lambda_metallic_loss: 0.
-    lambda_kd_loss: 10.
+    lambda_kd_loss: 1.
     # lambda_kd_loss: 100.
     # lambda_kr_loss: [100, 100., 10., 1000]
     # lambda_km_loss: [100, 10., 100., 1000]
     lambda_km_loss: 1000.
-    lambda_kr_loss: 10.
+    lambda_kr_loss: 1.
     lambda_clipimage_loss: 10.
 
   optimizer:
@@ -179,11 +179,11 @@ system:
       # material.light:
       #   lr: 0.01   
       geometry.encoding:
-        lr: 0.001
+        lr: 0.01
       geometry.feature_network:
         lr: 0.01
       geometry.encoding_pbr:
-        lr: 0.001
+        lr: 0.01
       geometry.feature_network_pbr:
         lr: 0.01
       # geometry.feature_network_v:

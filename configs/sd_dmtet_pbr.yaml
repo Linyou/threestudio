@@ -20,7 +20,7 @@ data:
   batch_uniform_azimuth: true
   eval_camera_distance: 3.
   eval_fovy_deg: 45.
-  n_val_views: 4
+  # n_val_views: 4
   num_workers: 32
   return_rays: false  
   offset_azimuth: 90
@@ -34,13 +34,13 @@ system:
   test_light_rotate_half: true
   test_light_rotation_all: false
   use_ks_smooth_loss: true
-  use_albedo_bg: true
-  detach_albedo: true
+  use_albedo_bg: false
+  detach_albedo: false
   reuse_prev_geometry: true
   init_rm_with_value: true
-  init_r_value: 0.2
+  init_r_value: 0.5
   init_m_value: 0.2
-  # guidance_alter: true
+  guidance_alter: false
   # clip_prop: 0.5
   # refinement: true
   # geometry_convert_from: ???
@@ -74,7 +74,7 @@ system:
     reset_light_path: "/mnt/pfs/users/linyoutian/threestudio/load/lights/irrmaps/high/lapa_4k.hdr"
     environment_scale: 1.0
     test_environment_scale: 1.0
-    environment_train: true
+    environment_train: false
     min_metallic: 0.0
     max_metallic: 0.9
     min_roughness: 0.02
@@ -89,8 +89,8 @@ system:
     switch_lights_interval: 1
     light_rotation: false
     use_visiblity: false
-    use_auto_gamma: true
-    single_channel_light: true
+    use_auto_gamma: false
+    single_channel_light: false
     fix_gamma: true
 
   background_type: "neural-environment-map-background"
@@ -115,24 +115,26 @@ system:
     prompt: ???
     negative_prompt: "ugly, highlight, shiny, metallic, reflection, lowres, low quality, cropped, highlight, shiny, metallic, reflection"
 
-  guidance_type: "stable-diffusion-guidance"
+  guidance_type: "stable-diffusion-guidance-trt"
   guidance:
+    enable_tiny_vae: true
     # unsharp_mask: true
     # unsharp_mix_factor: 0.1
     pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
     weighting_strategy: sds
-    guidance_scale: 20.0
+    guidance_scale: 100.0
     min_step_percent: 0.1
     max_step_percent: 0.5
     # view_dependent_prompting: false
 
-  guidance_type_II: "stable-diffusion-guidance"
+  guidance_type_II: "stable-diffusion-guidance-trt"
   guidance_II:
+    enable_tiny_vae: true
     unsharp_mask: false
     unsharp_mix_factor: 0.1
     pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
     weighting_strategy: sds
-    guidance_scale: 20.0
+    guidance_scale: 100.0
     min_step_percent: 0.1
     max_step_percent: 0.5
     # view_dependent_prompting: false
@@ -144,22 +146,22 @@ system:
       name: None
 
   loss:
-    # lambda_sds: [100, 0.1, 1., 5000]
+    # lambda_sds: [100, 0.1, 1., 1000]
     lambda_sds: 1.0
     # lambda_sds_II: 1.0
-    lambda_sds_II: 2.
+    lambda_sds_II: 1.
     lambda_normal_consistency: 0.
     lambda_laplacian_smoothness: 0.
     lambda_light_regularizer_white: 0.
-    lambda_light_regularizer_tv: 10.
+    lambda_light_regularizer_tv: 0.
     lambda_metallic_loss: 0.
-    lambda_kd_loss: 10.
+    lambda_kd_loss: 1.
     # lambda_kd_loss: 100.
-    # lambda_kr_loss: [100, 10., 100., 5000]
-    # lambda_km_loss: [100, 10., 100., 2000]
-    lambda_km_loss: 100.
-    lambda_kr_loss: 100.
-    lambda_clipimage_loss: 10.
+    # lambda_kr_loss: [100, 100., 10., 1000]
+    # lambda_km_loss: [100, 10., 100., 1000]
+    lambda_km_loss: 1000.
+    lambda_kr_loss: 1.
+    lambda_clipimage_loss: 1000.
 
   optimizer:
     name: AdamW
@@ -169,19 +171,19 @@ system:
       eps: 1.e-15
     params:
       background:
-        lr: 0.001
+        lr: 0.01
       background_II:
-        lr: 0.001
+        lr: 0.01
       # material.auto_gamma:
       #   lr: 0.001   
-      material.light:
-        lr: 0.01   
+      # material.light:
+      #   lr: 0.01   
       geometry.encoding:
         lr: 0.001
       geometry.feature_network:
         lr: 0.01
       geometry.encoding_pbr:
-        lr: 0.001
+        lr: 0.01
       geometry.feature_network_pbr:
         lr: 0.01
       # geometry.feature_network_v:
@@ -198,7 +200,7 @@ system:
       #   lr: 0.001
 
 trainer:
-  max_steps: 2000
+  max_steps: 1000
   log_every_n_steps: 1
   num_sanity_val_steps: 1
   val_check_interval: 200

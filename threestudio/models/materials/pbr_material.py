@@ -434,13 +434,14 @@ class PBRMaterial(BaseMaterial):
         )
         albedo = material[..., :3]
         metallic = (
-            material[..., 3:4] * (self.cfg.max_metallic - self.cfg.min_metallic)
+            material[..., 4] * (self.cfg.max_metallic - self.cfg.min_metallic)
             + self.cfg.min_metallic
         )
         roughness = (
-            material[..., 4:5] * (self.cfg.max_roughness - self.cfg.min_roughness)
+            material[..., 5] * (self.cfg.max_roughness - self.cfg.min_roughness)
             + self.cfg.min_roughness
         )
+        # import pdb; pdb.set_trace()
 
         out = {
             "albedo": albedo,

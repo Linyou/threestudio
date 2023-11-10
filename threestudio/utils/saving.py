@@ -326,12 +326,12 @@ class SaverMixin:
         cv2.imwrite(save_path, img)
         if name and self._wandb_logger:
             wandb.log({name: wandb.Image(save_path), "trainer/global_step": step})
-        if log_to_logger:
-            self.logger.experiment.add_image(
-                name, 
-                np.transpose(img[..., ::-1],(2,0,1)), 
-                step,
-            )
+        # if log_to_logger:
+        #     self.logger.experiment.add_image(
+        #         name, 
+        #         np.transpose(img[..., ::-1],(2,0,1)), 
+        #         step,
+        #     )
         
         return save_path
     
@@ -437,14 +437,14 @@ class SaverMixin:
                     "trainer/global_step": step,
                 }
             )
-        if name and log_to_logger:
-            imgs = np.expand_dims(
-                np.stack([
-                    np.transpose(im,(2,0,1)) for im in imgs
-                ]), 
-                axis=0
-            )
-            self.logger.experiment.add_video(name, imgs, step)
+        # if name and log_to_logger:
+        #     imgs = np.expand_dims(
+        #         np.stack([
+        #             np.transpose(im,(2,0,1)) for im in imgs
+        #         ]), 
+        #         axis=0
+        #     )
+        #     self.logger.experiment.add_video(name, imgs, step)
         return save_path
 
     def save_mesh(self, filename, v_pos, t_pos_idx, v_tex=None, t_tex_idx=None) -> str:

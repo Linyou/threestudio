@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from diffusers import DDIMScheduler, DDPMScheduler, StableDiffusionPipeline
+from diffusers import DDIMScheduler, DDPMScheduler, StableDiffusionPipeline, AutoencoderTiny
 from diffusers.utils.import_utils import is_xformers_available
 from tqdm import tqdm
 
@@ -13,14 +13,15 @@ from threestudio.utils.base import BaseObject
 from threestudio.utils.misc import C, cleanup, parse_version
 from threestudio.utils.ops import perpendicular_component
 from threestudio.utils.typing import *
+from threestudio.models.trt_model import TensorRTModel
 
 from einops import rearrange
 import kornia as KR
 import math
 
 
-@threestudio.register("stable-diffusion-guidance")
-class StableDiffusionGuidance(BaseObject):
+@threestudio.register("stable-diffusion-guidance-trt")
+class StableDiffusionGuidanceTRT(BaseObject):
     @dataclass
     class Config(BaseObject.Config):
         pretrained_model_name_or_path: str = "runwayml/stable-diffusion-v1-5"
@@ -51,11 +52,10 @@ class StableDiffusionGuidance(BaseObject):
         """Maximum number of batch items to evaluate guidance for (for debugging) and to save on disk. -1 means save all items."""
         max_items_eval: int = 4
         
-        taesd: bool = False
-        grad_type: str = "delta"
-        
         unsharp_mask: bool = False
         unsharp_mix_factor: float = 0.1
+        
+        enable_tiny_vae: bool = False
 
     cfg: Config
 
@@ -76,13 +76,15 @@ class StableDiffusionGuidance(BaseObject):
         self.pipe = StableDiffusionPipeline.from_pretrained(
             self.cfg.pretrained_model_name_or_path,
             **pipe_kwargs,
-        )
+        ).to(self.device)
         
-        # if self.cfg.taesd:
-        #     self.pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=torch.float16)
+        if self.cfg.enable_tiny_vae:
+            self.pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=self.weights_dtype).to(self.device)
         
-        self.pipe = self.pipe.to(self.device)
-
+        engine_path = '/mnt/pfs/users/shenmingzhu/vastcode/submit/FastDiffusion/engines/stable-diffusion-v2-1-base/engine_mt/unet.plan'
+        batch = 2
+        unet = TensorRTModel(trt_engine_path=engine_path, shape_list=[(batch, 4, 64, 64), (batch,), (batch, 77, 1024), (batch, 4, 64, 64)])
+        self.pipe.unet = unet
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
                 threestudio.info(
@@ -109,12 +111,12 @@ class StableDiffusionGuidance(BaseObject):
 
         # Create model
         self.vae = self.pipe.vae.eval()
-        self.unet = self.pipe.unet.eval()
+        self.unet = self.pipe.unet
 
         for p in self.vae.parameters():
             p.requires_grad_(False)
-        for p in self.unet.parameters():
-            p.requires_grad_(False)
+        # for p in self.unet.parameters():
+        #     p.requires_grad_(False)
 
         if self.cfg.token_merging:
             import tomesd
@@ -165,20 +167,23 @@ class StableDiffusionGuidance(BaseObject):
         encoder_hidden_states: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
         input_dtype = latents.dtype
+        trt_input_dict = {
+            "sample": latents.to(self.weights_dtype),
+            "timestep": t.to(self.weights_dtype),
+            "encoder_hidden_states": encoder_hidden_states.to(self.weights_dtype),
+        }
         return self.unet(
-            latents.to(self.weights_dtype),
-            t.to(self.weights_dtype),
-            encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
-        ).sample.to(input_dtype)
+            **trt_input_dict
+        )['latent']
 
     @torch.cuda.amp.autocast(enabled=False)
     def encode_images(
         self, imgs: Float[Tensor, "B 3 512 512"]
     ) -> Float[Tensor, "B 4 64 64"]:
         input_dtype = imgs.dtype
-        if self.cfg.taesd:
-            latents = self.vae.encode(imgs.to(self.weights_dtype)).latents
-            # latents = self.vae.scale_latents(posterior)
+        if self.cfg.enable_tiny_vae:
+            imgs = imgs * 0.5 + 0.5
+            latents = self.vae.encode(imgs.to(self.vae.dtype)).latents
         else:
             imgs = imgs * 2.0 - 1.0
             posterior = self.vae.encode(imgs.to(self.weights_dtype)).latent_dist
@@ -196,8 +201,7 @@ class StableDiffusionGuidance(BaseObject):
         latents = F.interpolate(
             latents, (latent_height, latent_width), mode="bilinear", align_corners=False
         )
-        if not self.cfg.taesd:
-            latents = 1 / self.vae.config.scaling_factor * latents
+        latents = 1 / self.vae.config.scaling_factor * latents
         image = self.vae.decode(latents.to(self.weights_dtype)).sample
         image = (image * 0.5 + 0.5).clamp(0, 1)
         return image.to(input_dtype)
@@ -266,15 +270,14 @@ class StableDiffusionGuidance(BaseObject):
 
             # perform guidance (high scale from paper!)
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-    
+
             # USE Unsharp
             if self.cfg.unsharp_mask:
-                noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)        
-    
-            guidance_delta = self.cfg.guidance_scale * (
+                noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)                 
+
+            noise_pred = noise_pred_text + self.cfg.guidance_scale * (
                 noise_pred_text - noise_pred_uncond
             )
-            noise_pred = noise_pred_text + guidance_delta
 
         if self.cfg.weighting_strategy == "sds":
             # w(t), sigma_t^2
@@ -288,12 +291,7 @@ class StableDiffusionGuidance(BaseObject):
                 f"Unknown weighting strategy: {self.cfg.weighting_strategy}"
             )
 
-        if self.cfg.grad_type == "sds":
-            grad = w * (noise_pred - noise)
-        elif self.cfg.grad_type == "delta":
-            grad = w * guidance_delta
-        else:
-            raise ValueError(f"Unknown grad type: {self.cfg.grad_type}")
+        grad = w * (noise_pred - noise)
 
         guidance_eval_utils = {
             "use_perp_neg": prompt_utils.use_perp_neg,
@@ -353,7 +351,6 @@ class StableDiffusionGuidance(BaseObject):
                     -1, 1, 1, 1
                 ) * perpendicular_component(e_i_neg, e_pos)
 
-
             noise_pred = noise_pred_uncond + self.cfg.guidance_scale * (
                 e_pos + accum_grad
             )
@@ -381,15 +378,14 @@ class StableDiffusionGuidance(BaseObject):
 
                 # perform guidance (high scale from paper!)
                 noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-                
+
                 # USE Unsharp
                 if self.cfg.unsharp_mask:
-                    noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)
-                
+                    noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)                     
+
                 noise_pred = noise_pred_text + self.cfg.guidance_scale * (
                     noise_pred_text - noise_pred_uncond
                 )
-                
 
         Ds = zs - sigma * noise_pred
 
@@ -532,11 +528,11 @@ class StableDiffusionGuidance(BaseObject):
             )
             # perform guidance (high scale from paper!)
             noise_pred_text, noise_pred_uncond = noise_pred.chunk(2)
-
+            
             # USE Unsharp
             if self.cfg.unsharp_mask:
-                noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)            
-
+                noise_pred_text = self.apply_unsharp_mask(noise_pred_text, t)     
+            
             noise_pred = noise_pred_text + self.cfg.guidance_scale * (
                 noise_pred_text - noise_pred_uncond
             )

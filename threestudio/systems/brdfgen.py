@@ -145,10 +145,10 @@ class BRDFGen(BaseLift3DSystem):
             background=self.background,
         )
         
-        if self.cfg.reuse_prev_geometry:
+        if self.cfg.reuse_prev_geometry and self.cfg.geometry_convert_from and not self.cfg.weights and not self.resumed:
             self.prev_meterials = threestudio.find(prev_system_cfg.material_type)(prev_system_cfg.material)
                 
-            self.pre_renderer = threestudio.find("nvdiff-rasterizer")(
+            self.pre_renderer = threestudio.find(prev_system_cfg.renderer_type)(
                 prev_system_cfg.renderer,
                 geometry=self.prev_geometry,
                 material=self.prev_meterials,
@@ -184,15 +184,15 @@ class BRDFGen(BaseLift3DSystem):
         
         # if self.cfg.test_light_rotation_all:
         #     self.renderer.material.read_all_lights()
-        
-        self.feature_extractor = CLIPImageProcessor.from_pretrained(
-            "lambdalabs/sd-image-variations-diffusers", 
-            subfolder="feature_extractor", 
-        )
-        self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
-            "lambdalabs/sd-image-variations-diffusers", 
-            subfolder="image_encoder",
-        )
+        if self.cfg.reuse_prev_geometry:
+            self.feature_extractor = CLIPImageProcessor.from_pretrained(
+                "lambdalabs/sd-image-variations-diffusers", 
+                subfolder="feature_extractor", 
+            )
+            self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(
+                "lambdalabs/sd-image-variations-diffusers", 
+                subfolder="image_encoder",
+            )
         
     def clip_image_loss(self, batch, current_rgb):
         
@@ -286,8 +286,14 @@ class BRDFGen(BaseLift3DSystem):
                 )
 
         if self.cfg.guidance_alter:
-            run_main_guidance = self.true_global_step % 2 == 0
-            run_dual_guidance = self.true_global_step % 2 == 1
+            # run_main_guidance = self.true_global_step % 2 == 0
+            # run_dual_guidance = self.true_global_step % 2 == 1
+            if random.random()<0.5:
+                run_main_guidance = False
+                run_dual_guidance = True
+            else:
+                run_main_guidance = True
+                run_dual_guidance = False
         else:
             run_main_guidance = True
             run_dual_guidance = True
@@ -304,6 +310,23 @@ class BRDFGen(BaseLift3DSystem):
             elif isinstance(
                 self.guidance,
                 threestudio.models.guidance.stable_diffusion_guidance.StableDiffusionGuidance,
+            ):
+                guidance_out = self.guidance(
+                    guidance_inp, 
+                    prompt_utils,  
+                    **batch, 
+                    rgb_as_latents=self.cfg.rgb_as_latents,
+                    guidance_eval=guidance_eval,
+                )
+                if guidance_eval:
+                    self.guidance_evaluation_save(
+                        out["comp_color"].detach()[: guidance_out["eval"]["bs"]],
+                        guidance_out["eval"]
+                    )
+                    guidance_out.pop("eval")
+            elif isinstance(
+                self.guidance,
+                threestudio.models.guidance.stable_diffusion_guidance_trt.StableDiffusionGuidanceTRT,
             ):
                 guidance_out = self.guidance(
                     guidance_inp, 
@@ -375,16 +398,6 @@ class BRDFGen(BaseLift3DSystem):
                 if name.startswith("loss_"):
                     loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")+"_II"])
             
-        if self.cfg.use_guidance_base:
-            guidance_base_inp = out["comp_albedo"]
-            guidance_base_out = self.guidance_base(
-                guidance_base_inp, cond_inp, prompt_utils, **batch, rgb_as_latents=False
-            )
-            for name, value in guidance_base_out.items():
-                self.log(f"train/base_{name}", value)
-                if name.startswith("loss_"):
-                    loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")])
-            
                 
         if self.cfg.use_albedo_brighness_loss:
             loss += self.C(self.cfg.loss['lambda_brighness']) * out["raw_albedo"].mean()
@@ -405,7 +418,7 @@ class BRDFGen(BaseLift3DSystem):
         
             
         if self.material.cfg.environment_train and 'lambda_light_regularizer_tv' in self.cfg.loss:
-            if self.C(self.cfg.loss['lambda_light_regularizer_tv']) > 0:
+            if self.C(self.cfg.loss['lambda_light_regularizer_tv']) > 0 and random.random()<0.5:
                 loss += self.C(self.cfg.loss['lambda_light_regularizer_tv']) * self.material.light_regularizer_tv()
             
         if self.material.cfg.environment_train and 'lambda_light_regularizer_white' in self.cfg.loss:
@@ -584,6 +597,7 @@ class BRDFGen(BaseLift3DSystem):
             self.material.rotate_lightning(light_upd_delta)
                 
         out = self(batch)
+    
         
         if self.cfg.texture and batch_idx == 0:
             probe = self.renderer.material.light.get_env_map()

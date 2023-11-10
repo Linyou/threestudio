@@ -11,4 +11,5 @@ from . import (
     multiview_unified_guidancev2,
     multiview_diffusion_guidance,
     stable_diffusion_unified_guidance_trt,
+    stable_diffusion_guidance_trt,
 )

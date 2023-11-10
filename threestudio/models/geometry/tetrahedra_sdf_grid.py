@@ -340,8 +340,15 @@ class TetrahedraSDFGrid(BaseExplicitGeometry):
                     other.feature_network.state_dict()
                 )
                 
-                if instance.cfg.use_new_pbr_encoder:
+                if instance.cfg.use_new_pbr_encoder and other.cfg.use_new_pbr_encoder:
                     instance.encoding_pbr.load_state_dict(other.encoding.state_dict())
+                elif instance.cfg.use_new_pbr_encoder:
+                    instance.encoding_pbr.load_state_dict(other.encoding.state_dict())
+                    
+                if instance.cfg.new_pbr_model and other.cfg.new_pbr_model:
+                    instance.feature_network_pbr.load_state_dict(
+                        other.feature_network_pbr.state_dict()
+                    )
                     
             return instance
         elif isinstance(other, ImplicitVolume):

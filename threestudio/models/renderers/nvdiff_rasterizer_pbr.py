@@ -50,6 +50,7 @@ class NVDiffRasterizerPBR(Rasterizer):
         v_pos_clip: Float[Tensor, "B Nv 4"] = self.ctx.vertex_transform(
             mesh.v_pos, mvp_mtx
         )
+        # import pdb; pdb.set_trace()
         rast, _ = self.ctx.rasterize(v_pos_clip, mesh.t_pos_idx, (height, width))
         mask = rast[..., 3:] > 0
         mask_aa = self.ctx.antialias(mask.float(), rast, v_pos_clip, mesh.t_pos_idx)
@@ -124,7 +125,7 @@ class NVDiffRasterizerPBR(Rasterizer):
             
             if self.cfg.positions_jitter:
                 jitter = torch.normal(
-                    mean=0, std=0.2,
+                    mean=0, std=0.1,
                     size=positions.shape,
                     device=positions.device,
                 )
@@ -208,44 +209,6 @@ class NVDiffRasterizerPBR(Rasterizer):
                         )
                     })
                 
-                
-            # out.update({
-            #     f"raw_albedo": results_dict['albedo']
-            # })
-
-
-            # gb_rgb_fg = torch.zeros(
-            #     batch_size, 
-            #     height, 
-            #     width, 
-            #     3
-            # ).to(rgb_fg)
-            # gb_rgb_fg[selector] = rgb_fg
-            # gb_rgb = torch.lerp(gb_rgb_bg, gb_rgb_fg, mask.float())
-
-            # gb_roughness = torch.zeros(batch_size, height, width, 1).to(roughness)
-            # gb_metallic = torch.zeros(batch_size, height, width, 1).to(metallic)
-            # gb_albedo = torch.zeros(batch_size, height, width, 3).to(albedo)
-            # gb_roughness[selector] = roughness
-            # gb_metallic[selector] = metallic
-            # gb_albedo[selector] = albedo
-
-            # white_bg = torch.ones_like(gb_rgb_bg)
-            # gb_roughness = torch.lerp(white_bg, gb_roughness, mask.float())
-            # gb_metallic = torch.lerp(white_bg, gb_metallic, mask.float())
-            # gb_albedo = torch.lerp(white_bg, gb_albedo, mask.float())
-            # gb_rgb_aa = self.ctx.antialias(gb_rgb, rast, v_pos_clip, mesh.t_pos_idx)
-            # gb_roughness_aa = self.ctx.antialias(gb_roughness, rast, v_pos_clip, mesh.t_pos_idx)
-            # gb_metallic_aa = self.ctx.antialias(gb_metallic, rast, v_pos_clip, mesh.t_pos_idx)
-            # gb_albedo_aa = self.ctx.antialias(gb_albedo, rast, v_pos_clip, mesh.t_pos_idx)
-
-            # out.update({
-            #     "comp_rgb": gb_rgb_aa, 
-            #     "comp_albedo": gb_albedo_aa,
-            #     "comp_roughness": gb_roughness_aa,
-            #     "comp_metallic": gb_metallic_aa,
-            #     "comp_rgb_bg": gb_rgb_bg,
-            # })
             
         if render_depth:
             # calculate w2c from c2w: R' = Rt, t' = -Rt * t

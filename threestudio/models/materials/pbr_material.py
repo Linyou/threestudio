@@ -116,6 +116,10 @@ class PBRMaterial(BaseMaterial):
             scale=self.cfg.environment_scale, 
             trainable=self.cfg.environment_train,
         )
+        
+        if self.cfg.light_rotation:
+            self.light.prebuild_rotations(32)
+        
         if self.cfg.use_auto_gamma:
             if self.cfg.fix_gamma:
                 self.auto_gamma = AutoGamma(2.2, False)
@@ -186,18 +190,18 @@ class PBRMaterial(BaseMaterial):
     ) -> Float[Tensor, "*B 3"]:
         prefix_shape = features.shape[:-1]
         
-        if "dir_features" in kwargs:
-            dir_features = kwargs["dir_features"]
-            neural_resiual = get_activation(self.cfg.material_activation)(dir_features)
-            (
-                # neural_diffuse,
-                # neural_specular,
-                neural_diffuse_light,
-                neural_specular_light,
-            ) = torch.split(
-                neural_resiual,
-                [3, 3], dim=-1
-            )
+        # if "dir_features" in kwargs:
+        #     dir_features = kwargs["dir_features"]
+        #     neural_resiual = get_activation(self.cfg.material_activation)(dir_features)
+        #     (
+        #         # neural_diffuse,
+        #         # neural_specular,
+        #         neural_diffuse_light,
+        #         neural_specular_light,
+        #     ) = torch.split(
+        #         neural_resiual,
+        #         [3, 3], dim=-1
+        #     )
         
         if self.cfg.brdf_autoencoder:
             material: Float[Tensor, "*B Nf"] = self.brdf_encoder(features)
@@ -296,12 +300,16 @@ class PBRMaterial(BaseMaterial):
             # use mlp 
             specular_albedo = F0
             
-        if self.cfg.light_rotation:
+        if self.cfg.light_rotation and self.training:
             # self.light.update_light(1)
             # self.light.build_mips()
-            roll_pixels = int((azimuth[0].item() / 180.) * 2048 + 800)
-            self.light.update_light(roll_pixels, rand=self.cfg.light_rotation_rand if self.training else 0)
-            self.light.build_mips()
+            # roll_pixels = int((azimuth[0].item() / 180.) * 2048 + 800)
+            # self.light.update_light(roll_pixels, rand=self.cfg.light_rotation_rand if self.training else 0)
+            # self.light.build_mips()
+            rota_index = int(((azimuth[0].item() + 180) / 360.) * 31)
+            # print("rota_index: ", rota_index)
+            # print("azimuth[0].item(): ", azimuth[0].item())
+            self.light.update_rotations(rota_index)
         
         if self.cfg.switch_lights and self.training:
             if kwargs.get("step", 0) % self.cfg.switch_lights_interval == 0:
@@ -332,7 +340,7 @@ class PBRMaterial(BaseMaterial):
                 reflective[..., [0, 2, 1]], 
                 roughness
             )
-        if self.cfg.single_channel_light:
+        if self.cfg.single_channel_light and self.training:
             diffuse_light, specular_light = (
                 torch.mean(diffuse_light, dim=-1, keepdim=True), 
                 torch.mean(specular_light, dim=-1, keepdim=True)
@@ -441,7 +449,6 @@ class PBRMaterial(BaseMaterial):
             material[..., 5] * (self.cfg.max_roughness - self.cfg.min_roughness)
             + self.cfg.min_roughness
         )
-        # import pdb; pdb.set_trace()
 
         out = {
             "albedo": albedo,
@@ -450,7 +457,7 @@ class PBRMaterial(BaseMaterial):
         }
 
         if self.cfg.use_bump:
-            perturb_normal = (material[..., 5:8] * 2 - 1) + torch.tensor(
+            perturb_normal = (material[..., 6:9] * 2 - 1) + torch.tensor(
                 [0, 0, 1], dtype=material.dtype, device=material.device
             )
             perturb_normal = F.normalize(perturb_normal.clamp(-1, 1), dim=-1)

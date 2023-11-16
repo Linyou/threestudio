@@ -10,4 +10,4 @@
 1. 第一阶段：`sh run_env.sh`
 2. 第二阶段：`sh run_env_dmtet.sh`
 3. 第三阶段：`sh run_env_dmtet_pbr.sh`
-4. 导出模型：`sh export
+4. 导出模型：`sh export`

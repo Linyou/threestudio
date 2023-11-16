@@ -47,9 +47,10 @@ class NVDiffRasterizerPBR(Rasterizer):
         batch_size = mvp_mtx.shape[0]
         mesh = self.geometry.isosurface()
 
-        v_pos_clip: Float[Tensor, "B Nv 4"] = self.ctx.vertex_transform(
-            mesh.v_pos, mvp_mtx
-        )
+        with torch.cuda.amp.autocast(enabled=False):
+            v_pos_clip: Float[Tensor, "B Nv 4"] = self.ctx.vertex_transform(
+                mesh.v_pos, mvp_mtx
+            )
         # import pdb; pdb.set_trace()
         rast, _ = self.ctx.rasterize(v_pos_clip, mesh.t_pos_idx, (height, width))
         mask = rast[..., 3:] > 0
@@ -125,7 +126,7 @@ class NVDiffRasterizerPBR(Rasterizer):
             
             if self.cfg.positions_jitter:
                 jitter = torch.normal(
-                    mean=0, std=0.1,
+                    mean=0, std=0.2,
                     size=positions.shape,
                     device=positions.device,
                 )

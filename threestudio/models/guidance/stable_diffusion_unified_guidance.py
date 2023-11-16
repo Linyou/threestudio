@@ -1,6 +1,7 @@
 import random
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -12,6 +13,7 @@ from diffusers import (
     DPMSolverSinglestepScheduler,
     StableDiffusionPipeline,
     UNet2DConditionModel,
+    AutoencoderTiny
 )
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
@@ -22,10 +24,13 @@ from tqdm import tqdm
 import threestudio
 from threestudio.models.networks import ToDTypeWrapper
 from threestudio.models.prompt_processors.base import PromptProcessorOutput
+from threestudio.models.guidance.controlnet_utils import *
 from threestudio.utils.base import BaseModule
 from threestudio.utils.misc import C, cleanup, enable_gradient, parse_version
 from threestudio.utils.ops import perpendicular_component
 from threestudio.utils.typing import *
+from threestudio.utils.typing import Float, Tensor
+
 
 
 @threestudio.register("stable-diffusion-unified-guidance")
@@ -50,9 +55,10 @@ class StableDiffusionUnifiedGuidance(BaseModule):
 
         # TODO
         # controlnet
-        controlnet_model_name_or_path: Optional[str] = None
-        preprocessor: Optional[str] = None
-        control_scale: float = 1.0
+        controlnet_model_name_or_path: Optional[List[str]] = None
+        controlnet_preprocessor: Optional[List[Optional[str]]] = None
+        controlnet_input: Optional[List[str]] = None
+        controlnet_scale: Optional[List[Any]] = None
 
         # TODO
         # lora
@@ -60,6 +66,8 @@ class StableDiffusionUnifiedGuidance(BaseModule):
 
         # efficiency-related configurations
         half_precision_weights: bool = True
+        enable_tiny_vae: bool = False
+        enable_trt_unet: bool = False
         enable_memory_efficient_attention: bool = False
         enable_sequential_cpu_offload: bool = False
         enable_attention_slicing: bool = False
@@ -181,21 +189,42 @@ class StableDiffusionUnifiedGuidance(BaseModule):
                 self.lora_layers._load_state_dict_pre_hooks.clear()
                 self.lora_layers._state_dict_hooks.clear()
 
-        threestudio.info(f"Loaded Stable Diffusion!")
-
         # controlnet
-        controlnet = None
+        controlnets: List[dict] = []
         if self.cfg.controlnet_model_name_or_path is not None:
             threestudio.info(f"Loading ControlNet ...")
 
-            controlnet = ControlNetModel.from_pretrained(
-                self.cfg.controlnet_model_name_or_path,
-                torch_dtype=self.weights_dtype,
-            ).to(self.device)
-            controlnet.eval()
-            enable_gradient(controlnet, enabled=False)
+            for controlnet_model_name_or_path, preprocessor, inp, scale in zip(self.cfg.controlnet_model_name_or_path, self.cfg.controlnet_preprocessor, self.cfg.controlnet_input, self.cfg.controlnet_scale):
+                model = ControlNetModel.from_pretrained(
+                    controlnet_model_name_or_path,
+                    torch_dtype=self.weights_dtype,
+                ).to(self.device)
+                enable_gradient(model, enabled=False)
+                model.eval()
+
+                if preprocessor is None:
+                    pp = IdentityPreprocessor()
+                elif preprocessor == "rgb2normal":
+                    pp = RGB2NormalPreprocessor()
+                    pp.model.to(self.device)
+                    enable_gradient(pp.model, enabled=False)
+                    pp.model.eval()
+                elif preprocessor == "rgb2canny":
+                    pp = RGB2CannyPreprocessor()
+                else:
+                    raise NotImplementedError
+
+                controlnet = {
+                    "model": model,
+                    "preprocessor": pp,
+                    "input": inp,
+                    "scale_spec": scale,
+                    "scale": 1.0
+                }
+                controlnets.append(controlnet)
 
             threestudio.info(f"Loaded ControlNet!")
+        self.controlnets = controlnets
 
         self.scheduler = DDPMScheduler.from_config(pipe.scheduler.config)
         self.num_train_timesteps = self.scheduler.config.num_train_timesteps
@@ -226,13 +255,9 @@ class StableDiffusionUnifiedGuidance(BaseModule):
             raise RuntimeError("phi model is not available.")
         return self._non_trainable_modules.pipe_phi
 
-    @property
-    def controlnet(self) -> ControlNetModel:
-        if self._non_trainable_modules.controlnet is None:
-            raise RuntimeError("ControlNet model is not available.")
-        return self._non_trainable_modules.controlnet
-
     def prepare_pipe(self, pipe: StableDiffusionPipeline):
+        if self.cfg.enable_tiny_vae:
+            pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=self.weights_dtype).to(self.device)
         if self.cfg.enable_memory_efficient_attention:
             if parse_version(torch.__version__) >= parse_version("2"):
                 threestudio.info(
@@ -273,6 +298,45 @@ class StableDiffusionUnifiedGuidance(BaseModule):
 
             tomesd.apply_patch(pipe.unet, **self.cfg.token_merging_params)
 
+    def forward_controlnets(
+        self,
+        sample: torch.FloatTensor,
+        timestep: Union[torch.Tensor, float, int],
+        encoder_hidden_states: torch.Tensor,
+        controlnet_cond: List[torch.tensor],
+        conditioning_scale: List[float],
+        class_labels: Optional[torch.Tensor] = None,
+        timestep_cond: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        
+        for i, (image, controlnet) in enumerate(zip(controlnet_cond, self.controlnets)):
+            down_samples, mid_sample = controlnet['model'](
+                sample.to(self.weights_dtype),
+                timestep.to(self.weights_dtype),
+                encoder_hidden_states.to(self.weights_dtype),
+                image.to(self.weights_dtype),
+                controlnet['scale'],
+                class_labels,
+                timestep_cond,
+                attention_mask,
+                cross_attention_kwargs,
+                return_dict=False,
+            )
+
+            # merge samples
+            if i == 0:
+                down_block_res_samples, mid_block_res_sample = down_samples, mid_sample
+            else:
+                down_block_res_samples = [
+                    samples_prev + samples_curr
+                    for samples_prev, samples_curr in zip(down_block_res_samples, down_samples)
+                ]
+                mid_block_res_sample += mid_sample
+
+        return down_block_res_samples, mid_block_res_sample            
+
     @torch.cuda.amp.autocast(enabled=False)
     def forward_unet(
         self,
@@ -308,12 +372,16 @@ class StableDiffusionUnifiedGuidance(BaseModule):
     ) -> Float[Tensor, "B 4 Hl Wl"]:
         # expect input in [-1, 1]
         input_dtype = imgs.dtype
-        posterior = vae.encode(imgs.to(vae.dtype)).latent_dist
-        if mode:
-            latents = posterior.mode()
+        if self.cfg.enable_tiny_vae:
+            imgs = imgs * 0.5 + 0.5
+            latents = vae.encode(imgs.to(vae.dtype)).latents
         else:
-            latents = posterior.sample()
-        latents = latents * vae.config.scaling_factor
+            posterior = vae.encode(imgs.to(vae.dtype)).latent_dist
+            if mode:
+                latents = posterior.mode()
+            else:
+                latents = posterior.sample()
+            latents = latents * vae.config.scaling_factor
         return latents.to(input_dtype)
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -353,6 +421,7 @@ class StableDiffusionUnifiedGuidance(BaseModule):
         elevation: Float[Tensor, "B"],
         azimuth: Float[Tensor, "B"],
         camera_distances: Float[Tensor, "B"],
+        controlnet_inputs: List[Float[Tensor, "B 3 512 512"]]
     ) -> Float[Tensor, "B 4 Hl Wl"]:
         batch_size = latents_noisy.shape[0]
 
@@ -364,6 +433,16 @@ class StableDiffusionUnifiedGuidance(BaseModule):
                 elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
             )
             with torch.no_grad():
+                if len(controlnet_inputs) > 0:
+                    down_block_res_samples, mid_block_res_samples = self.forward_controlnets(
+                        torch.cat([latents_noisy] * 4, dim=0),
+                        torch.cat([t] * 4, dim=0),
+                        encoder_hidden_states=text_embeddings,
+                        controlnet_cond=controlnet_inputs,
+                        conditioning_scale=[c['scale'] for c in self.controlnets]
+                    )
+                else:
+                    down_block_res_samples, mid_block_res_samples = None, None
                 with self.disable_unet_class_embedding(self.pipe.unet) as unet:
                     noise_pred = self.forward_unet(
                         unet,
@@ -373,6 +452,8 @@ class StableDiffusionUnifiedGuidance(BaseModule):
                         cross_attention_kwargs={"scale": 0.0}
                         if self.vsd_share_model
                         else None,
+                        down_block_additional_residuals=down_block_res_samples,
+                        mid_block_additional_residual=mid_block_res_samples,
                         velocity_to_epsilon=self.pipe.scheduler.config.prediction_type
                         == "v_prediction",
                     )  # (4B, 3, Hl, Wl)
@@ -397,6 +478,16 @@ class StableDiffusionUnifiedGuidance(BaseModule):
             text_embeddings = prompt_utils.get_text_embeddings(
                 elevation, azimuth, camera_distances, self.cfg.view_dependent_prompting
             )
+            if len(controlnet_inputs) > 0:
+                down_block_res_samples, mid_block_res_samples = self.forward_controlnets(
+                    torch.cat([latents_noisy] * 2, dim=0),
+                    torch.cat([t] * 2, dim=0),
+                    encoder_hidden_states=text_embeddings,
+                    controlnet_cond=controlnet_inputs,
+                    conditioning_scale=[c['scale'] for c in self.controlnets]
+                )
+            else:
+                down_block_res_samples, mid_block_res_samples = None, None            
             with torch.no_grad():
                 with self.disable_unet_class_embedding(self.pipe.unet) as unet:
                     noise_pred = self.forward_unet(
@@ -407,6 +498,8 @@ class StableDiffusionUnifiedGuidance(BaseModule):
                         cross_attention_kwargs={"scale": 0.0}
                         if self.vsd_share_model
                         else None,
+                        down_block_additional_residuals=down_block_res_samples,
+                        mid_block_additional_residual=mid_block_res_samples,                        
                         velocity_to_epsilon=self.pipe.scheduler.config.prediction_type
                         == "v_prediction",
                     )
@@ -523,6 +616,15 @@ class StableDiffusionUnifiedGuidance(BaseModule):
         )
         return F.mse_loss(noise_pred.float(), target.float(), reduction="mean")
 
+    def prepare_controlnet_inputs(self, controlnet_conditions: Dict[str, Float[Tensor, "B H W C"]]) -> List[Float[Tensor, "B 3 512 512"]]:
+        controlnet_inputs = []
+        for controlnet in self.controlnets:
+            controlnet_input = controlnet['preprocessor'](
+                controlnet_conditions[controlnet['input']]
+            )
+            controlnet_inputs.append(controlnet_input)
+        return controlnet_inputs
+
     def forward(
         self,
         rgb: Float[Tensor, "B H W C"],
@@ -532,7 +634,8 @@ class StableDiffusionUnifiedGuidance(BaseModule):
         camera_distances: Float[Tensor, "B"],
         mvp_mtx: Float[Tensor, "B 4 4"],
         c2w: Float[Tensor, "B 4 4"],
-        rgb_as_latents=False,
+        rgb_as_latents = False,
+        controlnet_conditions: Optional[Dict[str, Float[Tensor, "B H W C"]]] = None,
         **kwargs,
     ):
         batch_size = rgb.shape[0]
@@ -569,8 +672,10 @@ class StableDiffusionUnifiedGuidance(BaseModule):
         noise = torch.randn_like(latents)
         latents_noisy = self.scheduler.add_noise(latents, noise, t)
 
+        controlnet_inputs = self.prepare_controlnet_inputs(controlnet_conditions)
+
         eps_pretrain = self.get_eps_pretrain(
-            latents_noisy, t, prompt_utils, elevation, azimuth, camera_distances
+            latents_noisy, t, prompt_utils, elevation, azimuth, camera_distances, controlnet_inputs
         )
 
         latents_1step_orig = (
@@ -651,6 +756,7 @@ class StableDiffusionUnifiedGuidance(BaseModule):
             "rgb": rgb_BCHW.permute(0, 2, 3, 1),
             "weights": w,
             "lambdas": self.lambdas[t],
+            "controlnet_inputs": controlnet_inputs
         }
 
         if self.cfg.return_rgb_1step_orig:
@@ -722,3 +828,6 @@ class StableDiffusionUnifiedGuidance(BaseModule):
         self.max_step = int(
             self.num_train_timesteps * C(self.cfg.max_step_percent, epoch, global_step)
         )
+
+        for controlnet in self.controlnets:
+            controlnet['scale'] = C(controlnet['scale_spec'], epoch, global_step)

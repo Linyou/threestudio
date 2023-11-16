@@ -36,8 +36,8 @@ system:
   use_ks_smooth_loss: true
   use_albedo_bg: true
   detach_albedo: true
-  reuse_prev_geometry: true
-  init_rm_with_value: true
+  reuse_prev_geometry: false
+  init_rm_with_value: false
   init_r_value: 0.5
   init_m_value: 0.2
   guidance_alter: false
@@ -87,8 +87,8 @@ system:
     color_preset: 0.5
     switch_lights: false
     switch_lights_interval: 1
-    light_rotation: false
-    use_visiblity: false
+    light_rotation: true
+    use_visiblity: true
     use_auto_gamma: true
     single_channel_light: false
     fix_gamma: true
@@ -159,9 +159,9 @@ system:
     # lambda_kd_loss: 100.
     # lambda_kr_loss: [100, 100., 10., 1000]
     # lambda_km_loss: [100, 10., 100., 1000]
-    lambda_km_loss: 1000.
-    lambda_kr_loss: 10.
-    lambda_clipimage_loss: 10.
+    lambda_km_loss: 0.
+    lambda_kr_loss: 0.
+    lambda_clipimage_loss: 0.
 
   optimizer:
     name: AdamW
@@ -179,11 +179,11 @@ system:
       # material.light:
       #   lr: 0.01   
       geometry.encoding:
-        lr: 0.001
+        lr: 0.01
       geometry.feature_network:
         lr: 0.01
       geometry.encoding_pbr:
-        lr: 0.001
+        lr: 0.0001
       geometry.feature_network_pbr:
         lr: 0.01
       # geometry.feature_network_v:
@@ -200,7 +200,7 @@ system:
       #   lr: 0.001
 
 trainer:
-  max_steps: 2000
+  max_steps: 1000
   log_every_n_steps: 1
   num_sanity_val_steps: 1
   val_check_interval: 200

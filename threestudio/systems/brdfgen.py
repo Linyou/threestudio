@@ -182,8 +182,8 @@ class BRDFGen(BaseLift3DSystem):
         
         self.relight_batch_ids = [0, 10, 60]
         
-        # if self.cfg.test_light_rotation_all:
-        #     self.renderer.material.read_all_lights()
+        if self.cfg.test_light_rotation_all:
+            self.material.read_all_lights()
         if self.cfg.reuse_prev_geometry:
             self.feature_extractor = CLIPImageProcessor.from_pretrained(
                 "lambdalabs/sd-image-variations-diffusers", 
@@ -326,6 +326,9 @@ class BRDFGen(BaseLift3DSystem):
                     guidance_out.pop("eval")
             elif isinstance(
                 self.guidance,
+                threestudio.models.guidance.stable_diffusion_guidance.StableDiffusionGuidance,
+            ) or isinstance(
+                self.guidance,
                 threestudio.models.guidance.stable_diffusion_guidance_trt.StableDiffusionGuidanceTRT,
             ):
                 guidance_out = self.guidance(
@@ -344,6 +347,9 @@ class BRDFGen(BaseLift3DSystem):
             elif isinstance(
                 self.guidance,
                 threestudio.models.guidance.stable_diffusion_unified_guidance_trt.StableDiffusionUnifiedGuidanceTRT,
+            ) or isinstance(
+                self.guidance,
+                threestudio.models.guidance.stable_diffusion_unified_guidance.StableDiffusionUnifiedGuidance
             ):
                 controlnet_conditions = {
                     "rgb": out['comp_color']
@@ -525,13 +531,13 @@ class BRDFGen(BaseLift3DSystem):
     
     def loop_all_lights_noraml(self, batch, batch_idx):
         # self.renderer.material.read_all_lights()
-        self.renderer.material.test_switch_lights = True
+        self.material.test_switch_lights = True
         lightning_width = self.material.light.base_image.shape[1]
         delta = lightning_width/self.dataset.n_views
-        self.renderer.material.test_switch_lights_delta = int(batch_idx*delta)
-        for i in range(len(self.renderer.material.lights)):
-            self.renderer.material.lights_step_count = i
-            self.renderer.material.rotate_all_lightning(int(lightning_width/2))
+        self.material.test_switch_lights_delta = int(batch_idx*delta)
+        for i in range(len(self.material.lights)):
+            self.material.lights_step_count = i
+            self.material.rotate_all_lightning(int(lightning_width/2))
             out = self(batch)
             self.save_image_grid(
                 f"it{self.true_global_step}-test-lights-rotate-{i}/batch_{batch['index'][0]}.png",

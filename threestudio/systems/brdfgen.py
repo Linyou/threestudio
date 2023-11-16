@@ -384,23 +384,40 @@ class BRDFGen(BaseLift3DSystem):
         if self.cfg.guidance_type_II != "" and run_dual_guidance:
             prompt_utils_II = self.prompt_utils_II
             # prompt_utils_II = self.prompt_utils
-            guidance_out_II = self.guidance_II(
-                out["comp_albedo"], 
-                prompt_utils_II,  
-                **batch, 
-                rgb_as_latents=self.cfg.rgb_as_latents,
-                guidance_eval=guidance_eval,
-            )
-            if guidance_eval:
-                self.guidance_evaluation_save(
-                    out["comp_albedo"].detach()[: guidance_out_II["eval"]["bs"]],
-                    guidance_out_II["eval"],
-                    name='train_II'
+            if isinstance(
+                self.guidance,
+                threestudio.models.guidance.stable_diffusion_unified_guidance_trt.StableDiffusionUnifiedGuidanceTRT,
+            ) or isinstance(
+                self.guidance,
+                threestudio.models.guidance.stable_diffusion_unified_guidance.StableDiffusionUnifiedGuidance
+            ):
+                controlnet_conditions = {
+                    "rgb": out['comp_albedo']
+                }
+                if "comp_normal" in out:
+                    controlnet_conditions["normal"] = out["comp_normal"]
+                guidance_out_II = self.guidance_II(
+                    out["comp_albedo"], prompt_utils_II, **batch, rgb_as_latents=False,
+                    controlnet_conditions=controlnet_conditions
                 )
-                guidance_out_II.pop("eval")
-                
+            else:
+                guidance_out_II = self.guidance_II(
+                    out["comp_albedo"], 
+                    prompt_utils_II,  
+                    **batch, 
+                    rgb_as_latents=self.cfg.rgb_as_latents,
+                    guidance_eval=guidance_eval,
+                )
+                if guidance_eval:
+                    self.guidance_evaluation_save(
+                        out["comp_albedo"].detach()[: guidance_out_II["eval"]["bs"]],
+                        guidance_out_II["eval"],
+                        name='train_II'
+                    )
+                    guidance_out_II.pop("eval")
+                    
             for name, value in guidance_out_II.items():
-                self.log(f"train/{name}_II", value)
+                # self.log(f"train/{name}_II", value)
                 if name.startswith("loss_"):
                     loss += value * self.C(self.cfg.loss[name.replace("loss_", "lambda_")+"_II"])
             

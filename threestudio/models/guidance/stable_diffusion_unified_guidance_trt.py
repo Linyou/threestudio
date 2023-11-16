@@ -203,7 +203,7 @@ class StableDiffusionUnifiedGuidanceTRT(BaseModule):
                 enable_gradient(model, enabled=False)
                 model.eval()
 
-                if preprocessor is None:
+                if preprocessor == "id":
                     pp = IdentityPreprocessor()
                 elif preprocessor == "rgb2normal":
                     pp = RGB2NormalPreprocessor()

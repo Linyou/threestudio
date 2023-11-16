@@ -103,41 +103,91 @@ system:
     context_type: gl
     positions_jitter: true
 
+  # prompt_processor_type: "stable-diffusion-prompt-processor"
+  # prompt_processor:
+  #   pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1-base
+  #   prompt: ???
+  #   negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
+
+  # prompt_processor_type_II: "stable-diffusion-prompt-processor"
+  # prompt_processor_II:
+  #   pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1-base
+  #   prompt: ???
+  #   negative_prompt: "ugly, highlight, shiny, metallic, reflection, lowres, low quality, cropped, highlight, shiny, metallic, reflection"
+
+  # guidance_type: "stable-diffusion-guidance-trt"
+  # guidance:
+  #   enable_tiny_vae: true
+  #   # unsharp_mask: true
+  #   # unsharp_mix_factor: 0.1
+  #   pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
+  #   weighting_strategy: sds
+  #   guidance_scale: 100.0
+  #   min_step_percent: 0.02
+  #   max_step_percent: 0.5
+  #   # view_dependent_prompting: false
+
   prompt_processor_type: "stable-diffusion-prompt-processor"
   prompt_processor:
-    pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1-base
+    pretrained_model_name_or_path: "runwayml/stable-diffusion-v1-5"
     prompt: ???
-    negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
+    negative_prompt: "blur, oversaturated, ugly, tiling, low quality, noise, ugly pattern"
+
+  guidance_type: "stable-diffusion-unified-guidance-trt"
+  guidance:
+    pretrained_model_name_or_path: "runwayml/stable-diffusion-v1-5"
+    enable_tiny_vae: true
+    guidance_type: "sds"
+    guidance_scale: 100.
+    weighting_strategy: uniform
+    min_step_percent: 0.1
+    max_step_percent: 0.5
+    controlnet_model_name_or_path:
+      - "lllyasviel/control_v11p_sd15_canny"
+    controlnet_preprocessor:
+      - rgb2canny
+    controlnet_input:
+      - "normal"
+    controlnet_scale:
+      - [1000, 0.5, 0.0, 1001]
+
 
   prompt_processor_type_II: "stable-diffusion-prompt-processor"
   prompt_processor_II:
-    pretrained_model_name_or_path: stabilityai/stable-diffusion-2-1-base
+    pretrained_model_name_or_path: "runwayml/stable-diffusion-v1-5"
     prompt: ???
-    negative_prompt: "ugly, highlight, shiny, metallic, reflection, lowres, low quality, cropped, highlight, shiny, metallic, reflection"
+    # negative_prompt: "highlight, shiny, metallic, reflection, ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions, "
+    negative_prompt: "highlight, shiny, metallic, reflection, ugly, blurry, pixelated obscure, unnatural colors, unclear, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, "
 
-  guidance_type: "stable-diffusion-guidance-trt"
-  guidance:
-    enable_tiny_vae: true
-    # unsharp_mask: true
-    # unsharp_mix_factor: 0.1
-    pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
-    weighting_strategy: sds
-    guidance_scale: 100.0
-    min_step_percent: 0.1
-    max_step_percent: 0.5
-    # view_dependent_prompting: false
-
-  guidance_type_II: "stable-diffusion-guidance-trt"
+  guidance_type_II: "stable-diffusion-unified-guidance-trt"
   guidance_II:
-    enable_tiny_vae: false
-    unsharp_mask: false
-    unsharp_mix_factor: 0.1
-    pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
-    weighting_strategy: sds
-    guidance_scale: 100.0
+    pretrained_model_name_or_path: "runwayml/stable-diffusion-v1-5"
+    enable_tiny_vae: true
+    guidance_type: "sds"
+    guidance_scale: 100.
+    weighting_strategy: uniform
     min_step_percent: 0.1
     max_step_percent: 0.5
-    # view_dependent_prompting: false
+    controlnet_model_name_or_path:
+      - "lllyasviel/control_v11p_sd15_canny"
+    controlnet_preprocessor:
+      - rgb2canny
+    controlnet_input:
+      - "normal"
+    controlnet_scale:
+      - [1000, 0.2, 0.0, 1001]
+
+  # guidance_type_II: "stable-diffusion-guidance-trt"
+  # guidance_II:
+  #   enable_tiny_vae: true
+  #   unsharp_mask: false
+  #   unsharp_mix_factor: 0.1
+  #   pretrained_model_name_or_path: "stabilityai/stable-diffusion-2-1-base"
+  #   weighting_strategy: sds
+  #   guidance_scale: 100.0
+  #   min_step_percent: 0.02
+  #   max_step_percent: 0.5
+  #   # view_dependent_prompting: false
 
   loggers:
     wandb:
@@ -148,14 +198,16 @@ system:
   loss:
     # lambda_sds: [100, 0.1, 1., 1000]
     lambda_sds: 1.0
+    lambda_sd: 1.0
     # lambda_sds_II: 1.0
-    lambda_sds_II: 2.
+    lambda_sds_II: 1.
+    lambda_sd_II: 1.
     lambda_normal_consistency: 0.
     lambda_laplacian_smoothness: 0.
     lambda_light_regularizer_white: 0.
     lambda_light_regularizer_tv: 0.
     lambda_metallic_loss: 0.
-    lambda_kd_loss: 10.
+    lambda_kd_loss: 1.
     # lambda_kd_loss: 100.
     # lambda_kr_loss: [100, 100., 10., 1000]
     # lambda_km_loss: [100, 10., 100., 1000]
@@ -171,15 +223,15 @@ system:
       eps: 1.e-15
     params:
       background:
-        lr: 0.01
+        lr: 0.001
       background_II:
-        lr: 0.01
+        lr: 0.001
       # material.auto_gamma:
       #   lr: 0.001   
       # material.light:
       #   lr: 0.01   
       geometry.encoding:
-        lr: 0.01
+        lr: 0.001
       geometry.feature_network:
         lr: 0.01
       geometry.encoding_pbr:
@@ -200,7 +252,7 @@ system:
       #   lr: 0.001
 
 trainer:
-  max_steps: 1000
+  max_steps: 2000
   log_every_n_steps: 1
   num_sanity_val_steps: 1
   val_check_interval: 200
